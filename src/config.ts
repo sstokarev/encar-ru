@@ -20,7 +20,7 @@ export type {
 } from "./config.default";
 
 // TODO(U4): must match the final GitHub Pages domain of this repo.
-export const CONFIG_URL = "https://stokarev.github.io/encar-ru/config.json";
+export const CONFIG_URL = "https://sstokarev.github.io/encar-ru/config.json";
 
 const FETCH_TIMEOUT_MS = 3000;
 

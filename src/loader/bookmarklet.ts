@@ -9,7 +9,7 @@
  */
 
 // Placeholder until U4 deploys GitHub Pages. Single constant, replace here.
-export const WIDGET_ORIGIN = "encar-ru.example";
+export const WIDGET_ORIGIN = "sstokarev.github.io/encar-ru";
 
 /** Minimal window surface the loader touches (injectable for tests). */
 export interface LoaderWindow {

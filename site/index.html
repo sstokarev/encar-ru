@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Encar по-русски — цена под ключ в рублях</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#f7f7f8;color:#1a1a1a;line-height:1.5}
+  .wrap{max-width:640px;margin:0 auto;padding:24px 16px 64px}
+  h1{font-size:1.5rem}h2{font-size:1.15rem;margin-top:2em}
+  .card{background:#fff;border-radius:12px;padding:16px 20px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .step{display:flex;gap:12px;margin:10px 0}
+  .num{flex:none;width:28px;height:28px;border-radius:50%;background:#c00;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
+  a.bm{display:inline-block;background:#c00;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;margin:8px 0}
+  .muted{color:#666;font-size:.9rem}
+  code{background:#eee;border-radius:4px;padding:1px 5px}
+  .badge-demo{display:inline-block;background:#0a7d32;color:#fff;border-radius:6px;padding:2px 8px;font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Encar по-русски</h1>
+  <p>Смотрите машины на encar.com — а рядом с каждой ценой в вонах появится цена <span class="badge-demo">≈ в рублях под ключ</span>. На странице машины плашка раскрывается в полный расчёт: пошлина, доставка, комиссия.</p>
+  <p class="muted">Версия для ознакомления: цифры расчёта пока демонстрационные.</p>
+
+  <h2>iPhone (Safari)</h2>
+  <div class="card">
+    <div class="step"><div class="num">1</div><div>Установите Команду по ссылке: <b>скоро</b> <span class="muted">(появится после проверки на устройстве)</span></div></div>
+    <div class="step"><div class="num">2</div><div>В Настройках → Команды включите <b>«Разрешить выполнение скриптов»</b></div></div>
+    <div class="step"><div class="num">3</div><div>На любой странице encar.com нажмите <b>Поделиться → «Цена в РФ»</b></div></div>
+  </div>
+
+  <h2>Компьютер (Chrome)</h2>
+  <div class="card">
+    <div class="step"><div class="num">1</div><div>Перетащите эту кнопку на панель закладок:<br><a class="bm" id="bm-link" href="#">Цена в РФ</a></div></div>
+    <div class="step"><div class="num">2</div><div>Откройте <a href="https://www.encar.com" target="_blank" rel="noopener">encar.com</a>, найдите машины</div></div>
+    <div class="step"><div class="num">3</div><div>Нажмите закладку <b>«Цена в РФ»</b> — рядом с ценами появятся рубли</div></div>
+  </div>
+
+  <h2>Android (Chrome)</h2>
+  <div class="card">
+    <div class="step"><div class="num">1</div><div>Сохраните любую страницу в закладки (звёздочка), затем в закладках измените её: имя — <code>рф</code>, адрес — вставьте код кнопки (долгое нажатие на кнопку выше → «Копировать ссылку»)</div></div>
+    <div class="step"><div class="num">2</div><div>На странице encar наберите в адресной строке <code>рф</code> и выберите закладку — скрипт запустится</div></div>
+  </div>
+
+  <h2>Перевод сайта на русский</h2>
+  <div class="card">
+    <p>Сам сайт encar переводит ваш браузер: в Chrome и Яндекс.Браузере перевод предлагается автоматически (или через меню → «Перевести»). В Safari — кнопка <b>аА</b> в адресной строке → «Перевести на русский».</p>
+  </div>
+
+  <p class="muted">Вопросы и заказ автомобиля — у вашего менеджера.</p>
+</div>
+<script>
+  fetch('bookmarklet.txt').then(r=>r.text()).then(t=>{document.getElementById('bm-link').setAttribute('href', t.trim());}).catch(()=>{});
+</script>
+</body>
+</html>

@@ -1,10 +1,10 @@
 # iOS Shortcut and Android launch — loader install (dev doc, U3)
 
 The bookmarklet and the iOS Shortcut share one thin loader (KTD4): it only
-appends `<script src="https://encar-ru.example/widget.js?v=YYYYMMDD">` with the
+appends `<script src="https://sstokarev.github.io/encar-ru/widget.js?v=YYYYMMDD">` with the
 `v` cache-bust computed from the current date at each run, no-ops outside
 `*.encar.com`, and on repeat activation calls `window.__encarRu.rescan()`
-instead of loading twice. `encar-ru.example` is the placeholder origin —
+instead of loading twice. `sstokarev.github.io/encar-ru` is the placeholder origin —
 replace it with the GitHub Pages domain in U4 (single constant
 `WIDGET_ORIGIN` in `src/loader/bookmarklet.ts`; rebuild and re-export after
 changing it).
@@ -29,7 +29,7 @@ out with an error).
 
 ```javascript
 (function () {
-  var ORIGIN = "encar-ru.example"; // replace with the Pages domain in U4
+  var ORIGIN = "sstokarev.github.io/encar-ru"; // replace with the Pages domain in U4
   var host = location.hostname;
   if (host === "encar.com" || host.endsWith(".encar.com")) {
     if (window.__encarRu) {
