@@ -11,7 +11,12 @@
   .card{background:#fff;border-radius:12px;padding:16px 20px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}
   .step{display:flex;gap:12px;margin:10px 0}
   .num{flex:none;width:28px;height:28px;border-radius:50%;background:#c00;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
-  a.bm{display:inline-block;background:#c00;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;margin:8px 0}
+  a.bm{display:inline-block;background:#c00;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600}
+  .actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:8px 0}
+  button.copy{min-height:44px;padding:12px 18px;border:1px solid #c00;border-radius:8px;background:#fff;color:#c00;font:600 1rem/1 inherit;font-family:inherit;cursor:pointer}
+  button.copy[data-done]{border-color:#0a7d32;color:#0a7d32}
+  textarea.code{display:none;width:100%;box-sizing:border-box;min-height:90px;margin-top:10px;padding:8px;border:1px solid #ddd;border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.8rem}
+  textarea.code[data-shown]{display:block}
   .muted{color:#666;font-size:.9rem}
   code{background:#eee;border-radius:4px;padding:1px 5px}
   .badge-demo{display:inline-block;background:#0a7d32;color:#fff;border-radius:6px;padding:2px 8px;font-weight:700}
@@ -29,35 +34,42 @@
   <p>Смотрите машины на encar.com — а рядом с каждой ценой в вонах появится цена <span class="badge-demo">≈ в рублях под ключ</span>. На странице машины плашка раскрывается в полный расчёт: пошлина, доставка, комиссия.</p>
   <div class="note">Расчёт предварительный — итоговую цену подтверждает менеджер перед заказом.</div>
 
-  <h2>iPhone (Safari)</h2>
+  <h2>Кнопка «Цена в РФ»</h2>
   <div class="card">
-    <div class="step"><div class="num">1</div><div>Установите Команду по ссылке: <b>скоро</b> <span class="muted">(появится после проверки на устройстве)</span></div></div>
-    <div class="step"><div class="num">2</div><div>Откройте Настройки → Команды → Дополнительно и включите <b>«Разрешить выполнение скриптов»</b></div></div>
-    <div class="step"><div class="num">3</div><div>На любой странице encar.com нажмите <b>Поделиться → «Цена в РФ»</b>. При первом запуске телефон один раз спросит разрешение — нажмите <b>«Разрешить»</b></div></div>
+    <p>Это и есть вся программа — одна кнопка. На компьютере её перетаскивают на панель закладок, на телефоне — копируют код и вставляют в закладку.</p>
+    <div class="actions">
+      <a class="bm" id="bm-link" href="#">Цена в РФ</a>
+      <button class="copy" id="bm-copy" type="button">Скопировать код</button>
+    </div>
+    <textarea class="code" id="bm-code" readonly aria-label="Код кнопки"></textarea>
+    <p class="muted">Если кнопка «Скопировать код» не сработала, код появится в поле выше — выделите его и скопируйте вручную.</p>
+  </div>
+
+  <h2>iPhone и iPad (Safari)</h2>
+  <div class="card">
+    <div class="step"><div class="num">1</div><div>На этой странице нажмите <b>«Скопировать код»</b> (или задержите палец на красной кнопке <b>«Цена в РФ»</b> и выберите <b>«Скопировать ссылку»</b>)</div></div>
+    <div class="step"><div class="num">2</div><div>Откройте в Safari любую страницу и добавьте её в закладки: <b>Поделиться</b> (квадрат со стрелкой) → <b>«Добавить закладку»</b> → <b>«Сохранить»</b></div></div>
+    <div class="step"><div class="num">3</div><div>Откройте <b>Закладки</b> (значок книжки) → <b>«Изменить»</b> → нажмите на эту закладку. В строке <b>адреса</b> сотрите старый адрес и вставьте скопированный код, а в строке имени напишите <code>рф</code>. Нажмите <b>«Готово»</b></div></div>
+    <div class="step"><div class="num">4</div><div>Зайдите на <a href="https://www.encar.com" target="_blank" rel="noopener">encar.com</a>, откройте <b>Закладки</b> и нажмите <b>«рф»</b> — рядом с ценами появятся рубли</div></div>
+    <p class="muted">Так нужно сделать один раз. Дальше — просто открыть «Закладки» и нажать «рф» на любой странице encar.com.</p>
     <details>
-      <summary>Пока ссылки нет: собрать Команду вручную</summary>
+      <summary>Опционально, позже: команда в меню «Поделиться»</summary>
       <div class="muted">
-        <p>Для тех, кто дружит с техникой. Подробная инструкция с готовым скриптом — в файле <a href="shortcut-install.md" target="_blank" rel="noopener">shortcut-install.md</a>. Кратко:</p>
-        <ol>
-          <li>В приложении <b>Команды</b> создайте новую команду с именем <code>Encar RU</code>.</li>
-          <li>Добавьте действие <b>«Выполнить JavaScript на веб-странице»</b> и вставьте в него скрипт из инструкции выше.</li>
-          <li>В настройках команды включите <b>«На странице экспорта»</b> (Share Sheet) и выберите тип «Веб-страницы Safari».</li>
-          <li>Включите «Разрешить выполнение скриптов» (шаг 2) — и пользуйтесь через кнопку «Поделиться».</li>
-        </ol>
+        <p>Тем, кто хочет запускать расчёт прямо из меню «Поделиться», подойдёт Команда (приложение «Команды»). Это не обязательно и настраивается дольше — инструкция в файле <a href="shortcut-install.md" target="_blank" rel="noopener">shortcut-install.md</a>. Закладка «рф» из шагов выше работает так же.</p>
       </div>
     </details>
   </div>
 
   <h2>Компьютер (Chrome)</h2>
   <div class="card">
-    <div class="step"><div class="num">1</div><div>Перетащите эту кнопку на панель закладок:<br><a class="bm" id="bm-link" href="#">Цена в РФ</a></div></div>
+    <div class="step"><div class="num">1</div><div>Перетащите красную кнопку <b>«Цена в РФ»</b> (выше) на панель закладок браузера</div></div>
     <div class="step"><div class="num">2</div><div>Откройте <a href="https://www.encar.com" target="_blank" rel="noopener">encar.com</a>, найдите машины</div></div>
     <div class="step"><div class="num">3</div><div>Нажмите закладку <b>«Цена в РФ»</b> — рядом с ценами появятся рубли</div></div>
   </div>
 
   <h2>Android (Chrome)</h2>
   <div class="card">
-    <div class="step"><div class="num">1</div><div>Скопируйте код кнопки: долгое нажатие на красную кнопку <b>«Цена в РФ»</b> выше → <b>«Копировать ссылку»</b></div></div>
+    <div class="step"><div class="num">1</div><div>Нажмите <b>«Скопировать код»</b> в блоке выше</div></div>
     <div class="step"><div class="num">2</div><div>Добавьте любую страницу в закладки (звёздочка в меню Chrome)</div></div>
     <div class="step"><div class="num">3</div><div>Откройте Меню → Закладки, найдите её и нажмите <b>Изменить</b>: имя — <code>рф</code>, а в поле адреса вставьте скопированный код вместо старого адреса</div></div>
     <div class="step"><div class="num">4</div><div>Теперь на любой странице encar.com наберите в адресной строке <code>рф</code> и нажмите на появившуюся закладку — рядом с ценами появятся рубли</div></div>
@@ -77,13 +89,72 @@
     <b>Что значит «расчёт по запросу» у электромобилей?</b>
     <p>Для электромобилей (и некоторых редких машин) пошлина считается по особым правилам, и автоматический расчёт был бы неточным. Напишите менеджеру — он посчитает вручную.</p>
     <b>Цены пропали после обновления страницы — что делать?</b>
-    <p>Это нормально: после полной перезагрузки страницы нажмите закладку (или Команду на iPhone) ещё раз — цены вернутся.</p>
+    <p>Это нормально: после полной перезагрузки страницы нажмите закладку «рф» ещё раз — цены вернутся.</p>
+    <b>На iPhone закладка не сохраняет код — что делать?</b>
+    <p>Проверьте, что вы вставили код в строку <b>адреса</b> закладки, а не в строку имени, и что он начинается с <code>javascript:</code>. Если Safari обрезал начало — вставьте код заново.</p>
   </div>
 
   <p class="muted">Вопросы и заказ автомобиля — у вашего менеджера.</p>
 </div>
 <script>
-  fetch('bookmarklet.txt').then(r=>r.text()).then(t=>{document.getElementById('bm-link').setAttribute('href', t.trim());}).catch(()=>{});
+  (function () {
+    var link = document.getElementById('bm-link');
+    var copy = document.getElementById('bm-copy');
+    var code = document.getElementById('bm-code');
+    var payload = '';
+
+    function flash(text) {
+      copy.textContent = text;
+      copy.setAttribute('data-done', '');
+      setTimeout(function () {
+        copy.textContent = 'Скопировать код';
+        copy.removeAttribute('data-done');
+      }, 2500);
+    }
+
+    // Reveals the raw code so the user can copy it by hand.
+    function reveal() {
+      code.setAttribute('data-shown', '');
+      code.focus();
+      code.select();
+    }
+
+    // execCommand fallback for older mobile Safari (no async clipboard API).
+    function legacyCopy() {
+      code.setAttribute('data-shown', '');
+      code.focus();
+      code.setSelectionRange(0, code.value.length);
+      try {
+        return document.execCommand('copy');
+      } catch (e) {
+        return false;
+      }
+    }
+
+    copy.addEventListener('click', function () {
+      if (!payload) { reveal(); return; }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(payload).then(
+          function () { flash('Скопировано ✓'); },
+          function () { if (legacyCopy()) { flash('Скопировано ✓'); } else { reveal(); } }
+        );
+        return;
+      }
+      if (legacyCopy()) { flash('Скопировано ✓'); } else { reveal(); }
+    });
+
+    // Loaded last so a missing/blocked fetch never breaks the copy button.
+    try {
+      fetch('bookmarklet.txt')
+        .then(function (r) { return r.text(); })
+        .then(function (t) {
+          payload = t.trim();
+          link.setAttribute('href', payload);
+          code.value = payload;
+        })
+        .catch(function () {});
+    } catch (e) {}
+  })();
 </script>
 </body>
 </html>

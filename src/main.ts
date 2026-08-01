@@ -11,6 +11,10 @@
  * U7: lot params are extracted from the DOM (src/scan/params.ts). Card pages
  * with full real params compute exactly (badge without "≈"); listings and
  * degraded cards stay approximate or fall back to "расчёт по запросу".
+ *
+ * U9: after every scan pass the ko->ru dictionary is applied to the page
+ * (src/translate/apply.ts), and the one-time browser-translation hint is
+ * shown once prices have actually been found.
  */
 
 import { scanPrices } from "./scan/scanner";
@@ -25,6 +29,7 @@ import { attachBadge } from "./ui/badge";
 import { attachBreakdown, isDetailPage } from "./ui/breakdown";
 import { loadConfig, type LoadedConfig } from "./config";
 import { resolveRates, type ResolvedRates } from "./rates/cbr";
+import { applyDictionary, showTranslateHint } from "./translate/apply";
 
 const VERSION = "0.3.0";
 
@@ -71,7 +76,8 @@ export function init(): void {
     // Card params describe the single lot of the page; listing params are
     // re-read per price element from its own row (U7).
     const cardLot = detail ? toLotDetails(extractCardParams(document)) : null;
-    for (const candidate of scanPrices(document)) {
+    const candidates = scanPrices(document);
+    for (const candidate of candidates) {
       const lot =
         cardLot ?? toLotDetails(extractListingParams(candidate.element));
       attachBadge(candidate, rates.krwRub, lotPrecision(lot));
@@ -79,6 +85,13 @@ export function init(): void {
         // U2: on the car screen the badge expands into the cost breakdown.
         attachBreakdown(candidate, loaded, rates, lot);
       }
+    }
+    // U9: the dictionary runs after the scan, so prices are already annotated
+    // (and therefore off limits) by the time any text is rewritten.
+    applyDictionary(document);
+    if (candidates.length > 0) {
+      // One-time hint about full-page browser translation (R12).
+      showTranslateHint(document);
     }
   };
 

@@ -11,6 +11,7 @@ import {
   BREAKDOWN_ATTR,
   type BreakdownLotDetails,
 } from "../src/ui/breakdown";
+import { attachBadge } from "../src/ui/badge";
 import { computeAllIn } from "../src/calc/customs";
 import { buildOrderLink } from "../src/ui/order-button";
 import type { ResolvedRates } from "../src/rates/cbr";
@@ -21,6 +22,7 @@ function readFixture(name: string): string {
 }
 
 const CARD_HTML = readFixture("card-fem.html");
+const LISTING_HTML = readFixture("listing-desktop.html");
 
 const TEST_CONFIG_URL = "https://config.test/config.json";
 const DETAIL_PATH = "/cars/detail/41756847";
@@ -81,6 +83,29 @@ function toggleOf(host: HTMLElement): HTMLButtonElement {
   const btn = shadowOf(host).querySelector<HTMLButtonElement>("button");
   if (!btn) throw new Error("toggle button not found");
   return btn;
+}
+
+function closeOf(host: HTMLElement): HTMLButtonElement {
+  const btn = shadowOf(host).querySelector<HTMLButtonElement>("[data-close]");
+  if (!btn) throw new Error("close button not found");
+  return btn;
+}
+
+function badgeHosts(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>("[data-encar-ru-badge]"),
+  );
+}
+
+/** True when a 만원 unit node follows the host — i.e. the badge split the price. */
+function splitsPriceText(host: HTMLElement): boolean {
+  let node: ChildNode | null = host.nextSibling;
+  while (node !== null) {
+    const text = (node.textContent ?? "").trim();
+    if (text !== "") return /^만\s*원$/.test(text);
+    node = node.nextSibling;
+  }
+  return false;
 }
 
 function rowValue(host: HTMLElement, itemId: string): string {
@@ -336,6 +361,128 @@ describe("breakdown panel", () => {
     const toggle = toggleOf(host);
     expect(parseInt(toggle.style.minWidth, 10)).toBeGreaterThanOrEqual(44);
     expect(parseInt(toggle.style.minHeight, 10)).toBeGreaterThanOrEqual(44);
+  });
+
+  describe("overlay presentation (U8)", () => {
+    it("renders a dialog header with the title and a 44x44 close button", () => {
+      const host = attachDirect(CLEAN_CONFIG, KRW);
+      const panel = panelOf(host);
+      expect(panel.getAttribute("role")).toBe("dialog");
+      expect(panel.getAttribute("aria-label")).toBe("Цена под ключ в РФ");
+      expect(
+        panel.querySelector("[data-header] [data-title]")?.textContent,
+      ).toBe("Цена под ключ в РФ");
+
+      const close = closeOf(host);
+      expect(close.getAttribute("aria-label")).toBe("Закрыть");
+      expect(parseInt(close.style.minWidth, 10)).toBeGreaterThanOrEqual(44);
+      expect(parseInt(close.style.minHeight, 10)).toBeGreaterThanOrEqual(44);
+    });
+
+    it("the close button closes the open panel", () => {
+      const host = attachDirect(CLEAN_CONFIG, KRW);
+      toggleOf(host).click();
+      expect(panelOf(host).hidden).toBe(false);
+
+      closeOf(host).click();
+      expect(panelOf(host).hidden).toBe(true);
+      expect(toggleOf(host).getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("Esc closes the panel", () => {
+      const host = attachDirect(CLEAN_CONFIG, KRW);
+      toggleOf(host).click();
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      expect(panelOf(host).hidden).toBe(true);
+    });
+
+    it("a click outside closes the panel, a click on the widget does not", () => {
+      const host = attachDirect(CLEAN_CONFIG, KRW);
+      toggleOf(host).click();
+
+      // Shadow-tree clicks are retargeted to the host element.
+      host.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(panelOf(host).hidden).toBe(false);
+
+      document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(panelOf(host).hidden).toBe(true);
+    });
+
+    it("positions the open panel inside the viewport", () => {
+      const host = attachDirect(CLEAN_CONFIG, KRW);
+      const panel = panelOf(host);
+      toggleOf(host).click();
+      // Wide viewport (jsdom media queries never match): anchored card with
+      // computed coordinates clamped away from the viewport edges.
+      const left = parseInt(panel.style.left, 10);
+      const top = parseInt(panel.style.top, 10);
+      expect(left).toBeGreaterThanOrEqual(0);
+      expect(left).toBeLessThanOrEqual(window.innerWidth);
+      expect(top).toBeGreaterThanOrEqual(0);
+      expect(top).toBeLessThanOrEqual(window.innerHeight);
+    });
+
+    it("keeps the stylesheet overlay contract (fixed, z-index, sheet)", () => {
+      const host = attachDirect(CLEAN_CONFIG, KRW);
+      const css = shadowOf(host).querySelector("style")?.textContent ?? "";
+      expect(css).toContain("position: fixed");
+      expect(css).toContain("z-index: 2147483000");
+      expect(css).toContain("@media (max-width: 599px)");
+      expect(css).toContain("env(safe-area-inset-bottom, 0px)");
+    });
+  });
+});
+
+describe("badge placement (U8)", () => {
+  it("keeps the fem card price and its 만원 unit together", async () => {
+    stubFetchOk(REMOTE_CONFIG);
+    loadFixture(CARD_HTML);
+    init();
+    await vi.waitFor(() => {
+      expect(badgeHosts().length).toBe(1);
+    });
+
+    const price = document.querySelector<HTMLElement>(
+      "[data-intl-currency-amount]",
+    )!;
+    const unit = price.nextElementSibling!;
+    expect(unit.hasAttribute("data-intl-currency-unit")).toBe(true);
+    expect(unit.textContent).toBe("만원");
+    // Nothing of ours sits inside the price element or between it and the
+    // unit: the host page's own price line is untouched.
+    expect(price.querySelector("[data-encar-ru-host]")).toBeNull();
+
+    const badge = badgeHosts()[0]!;
+    expect(unit.nextElementSibling).toBe(badge);
+    expect(badge.nextElementSibling).toBe(breakdownHost());
+  });
+
+  it("badge hosts are nowrap inline-blocks that never split a price", async () => {
+    stubFetchOk(REMOTE_CONFIG);
+    window.history.replaceState(null, "", "/search/all");
+    loadFixture(LISTING_HTML);
+    init();
+    await vi.waitFor(() => {
+      expect(badgeHosts().length).toBeGreaterThan(0);
+    });
+
+    for (const host of badgeHosts()) {
+      expect(host.style.display).toBe("inline-block");
+      expect(host.style.whiteSpace).toBe("nowrap");
+      expect(host.style.verticalAlign).toBe("middle");
+      expect(splitsPriceText(host)).toBe(false);
+    }
+  });
+
+  it("badge styles stay inherit-based with a px floor", () => {
+    const el = document.createElement("span");
+    document.body.appendChild(el);
+    attachBadge({ element: el, krw: 10_000_000 }, 0.05);
+    const badge = badgeHosts()[0]!;
+    const css = badge.shadowRoot?.querySelector("style")?.textContent ?? "";
+    expect(css).toContain("font-size: max(11px, 0.9em)");
+    expect(css).toContain("white-space: nowrap");
+    expect(css).toContain("vertical-align: middle");
   });
 });
 
