@@ -114,4 +114,9 @@ export function init(): void {
   }
 }
 
-init();
+// Auto-run in the browser; tests call init() themselves after stubbing the
+// network. Without this guard the import-time run captures a real fetch to the
+// CBR mirror in the shared rates promise, and every later rescan waits on it.
+if (typeof window !== "undefined" && !("__vitest_worker__" in globalThis)) {
+  init();
+}
