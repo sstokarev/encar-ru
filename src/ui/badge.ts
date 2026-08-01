@@ -6,6 +6,7 @@
  */
 
 import { ANNOTATED_ATTR, BADGE_ATTR, type PriceCandidate } from "../scan/scanner";
+import type { Precision } from "../calc/customs";
 
 const BADGE_STYLE = `
   :host {
@@ -24,23 +25,28 @@ const BADGE_STYLE = `
   }
 `;
 
-/** Formats a RUB amount as "≈ 12 345 678 ₽" (space-grouped thousands). */
-export function formatRub(value: number): string {
+/**
+ * Formats a RUB amount as "≈ 12 345 678 ₽" (space-grouped thousands).
+ * Pass approx=false to drop the marker for exact-precision values (R3).
+ */
+export function formatRub(value: number, approx: boolean = true): string {
   const grouped = String(Math.round(value)).replace(
     /\B(?=(\d{3})+(?!\d))/g,
     " ",
   );
-  return `≈ ${grouped} ₽`;
+  return approx ? `≈ ${grouped} ₽` : `${grouped} ₽`;
 }
 
 /**
  * Marks the price element as annotated and appends a Shadow DOM badge with
  * the converted RUB value. Idempotent: a second call for the same element
- * is a no-op thanks to the data-attribute marker.
+ * is a no-op thanks to the data-attribute marker. Only exact precision
+ * drops the "≈" marker (U7, R3): listings and degraded cards keep it.
  */
 export function attachBadge(
   candidate: PriceCandidate,
   rubPerKrw: number,
+  precision: Precision = "approx",
 ): void {
   const el = candidate.element;
   if (el.hasAttribute(ANNOTATED_ATTR)) return;
@@ -56,7 +62,10 @@ export function attachBadge(
   const style = doc.createElement("style");
   style.textContent = BADGE_STYLE;
   const label = doc.createElement("span");
-  label.textContent = formatRub(candidate.krw * rubPerKrw);
+  label.textContent = formatRub(
+    candidate.krw * rubPerKrw,
+    precision !== "exact",
+  );
   shadow.append(style, label);
 
   el.appendChild(host);

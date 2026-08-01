@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parsePriceText } from "../src/scan/scanner";
 import { init } from "../src/main";
@@ -34,8 +34,19 @@ function loadFixture(html: string): void {
   document.body.innerHTML = parsed.body.innerHTML;
 }
 
-function runWidget(): void {
+/**
+ * U5: annotation is gated on config + rates resolution. With fetch stubbed
+ * to fail synchronously both settle within microtasks; two macrotask ticks
+ * are enough to flush the chain (config tier rates = 0.055 KRW_RUB).
+ */
+async function settle(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+async function runWidget(): Promise<void> {
   init();
+  await settle();
 }
 
 function badgeHosts(): HTMLElement[] {
@@ -48,8 +59,16 @@ function badgeText(host: HTMLElement): string {
   return host.shadowRoot?.querySelector("span")?.textContent ?? "";
 }
 
+beforeEach(() => {
+  // No network in tests: config falls back to embedded defaults and rates to
+  // the config tier (reference KRW_RUB 0.055 — the former mock value).
+  vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
+});
+
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  localStorage.clear();
   document.body.innerHTML = "";
 });
 
@@ -65,15 +84,15 @@ describe("price parsing", () => {
 });
 
 describe("desktop listing fixture", () => {
-  it(`annotates exactly ${LISTING_BADGE_COUNT} priced lots`, () => {
+  it(`annotates exactly ${LISTING_BADGE_COUNT} priced lots`, async () => {
     loadFixture(LISTING_HTML);
-    runWidget();
+    await runWidget();
     expect(badgeHosts().length).toBe(LISTING_BADGE_COUNT);
   });
 
-  it("marks every badge host untranslatable and formats RUB", () => {
+  it("marks every badge host untranslatable and formats RUB", async () => {
     loadFixture(LISTING_HTML);
-    runWidget();
+    await runWidget();
     const hosts = badgeHosts();
     expect(hosts.length).toBeGreaterThan(0);
     for (const host of hosts) {
@@ -83,22 +102,23 @@ describe("desktop listing fixture", () => {
     }
   });
 
-  it("adds no duplicate badges when run repeatedly", () => {
+  it("adds no duplicate badges when run repeatedly", async () => {
     loadFixture(LISTING_HTML);
-    runWidget();
-    runWidget();
+    await runWidget();
+    await runWidget();
     window.__encarRu?.rescan();
+    await settle();
     expect(badgeHosts().length).toBe(LISTING_BADGE_COUNT);
   });
 });
 
 describe("fem card fixture", () => {
-  it("annotates the main price with the mock RUB value", () => {
+  it("annotates the main price with the config-tier RUB value", async () => {
     loadFixture(CARD_HTML);
-    runWidget();
+    await runWidget();
     const hosts = badgeHosts();
     expect(hosts.length).toBe(1);
-    // 659만원 = 6,590,000 KRW; 6,590,000 * 0.055 = 362,450 RUB (mock rate)
+    // 659만원 = 6,590,000 KRW; 6,590,000 * 0.055 = 362,450 RUB (config tier)
     expect(badgeText(hosts[0]!)).toBe("≈ 362 450 ₽");
     expect(hosts[0]!.closest("[data-intl-currency]")).not.toBeNull();
   });
@@ -107,17 +127,17 @@ describe("fem card fixture", () => {
 describe("browser-translated DOM", () => {
   const variants: TranslationVariant[] = ["english-unit", "strip-unit"];
   for (const variant of variants) {
-    it(`listing (${variant}) keeps the same badge count`, () => {
+    it(`listing (${variant}) keeps the same badge count`, async () => {
       loadFixture(LISTING_HTML);
       emulateBrowserTranslation(document.body, variant);
-      runWidget();
+      await runWidget();
       expect(badgeHosts().length).toBe(LISTING_BADGE_COUNT);
     });
 
-    it(`card (${variant}) still annotates the main price`, () => {
+    it(`card (${variant}) still annotates the main price`, async () => {
       loadFixture(CARD_HTML);
       emulateBrowserTranslation(document.body, variant);
-      runWidget();
+      await runWidget();
       const hosts = badgeHosts();
       expect(hosts.length).toBe(1);
       expect(badgeText(hosts[0]!)).toBe("≈ 362 450 ₽");
@@ -126,10 +146,10 @@ describe("browser-translated DOM", () => {
 });
 
 describe("regex fallback", () => {
-  it("finds prices in markup without known price selectors", () => {
+  it("finds prices in markup without known price selectors", async () => {
     document.body.innerHTML =
       "<div><b>1,250</b>만원</div><p>즉시구매 660만원</p>";
-    runWidget();
+    await runWidget();
     const texts = badgeHosts().map(badgeText);
     expect(badgeHosts().length).toBe(2);
     expect(texts).toContain("≈ 687 500 ₽"); // 12,500,000 KRW * 0.055
@@ -141,7 +161,7 @@ describe("dynamic content (MutationObserver)", () => {
   it("annotates nodes inserted after init", async () => {
     document.body.innerHTML =
       '<ul><li><span class="prc"><strong>900</strong>만원</span></li></ul>';
-    runWidget();
+    await runWidget();
     expect(badgeHosts().length).toBe(1);
 
     const li = document.createElement("li");
@@ -154,16 +174,18 @@ describe("dynamic content (MutationObserver)", () => {
 });
 
 describe("zero-price diagnostic", () => {
-  it("warns exactly when a page with a body yields no candidates", () => {
+  it("warns exactly when a page with a body yields no candidates", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     document.body.innerHTML =
       '<span class="prc"><strong>500</strong>만원</span>';
     window.__encarRu?.rescan();
+    await settle();
     expect(warn).not.toHaveBeenCalled();
 
     document.body.innerHTML = "<p>주행거리 12345km, 가격 정보 없음</p>";
     window.__encarRu?.rescan();
+    await settle();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith("[encar-ru] no prices found");
   });

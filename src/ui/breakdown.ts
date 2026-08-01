@@ -6,13 +6,21 @@
  * the Order button (R5). Tap target is >= 44x44 px. When the embedded
  * fallback config is in use, the panel shows a marker line.
  *
- * Mock stage (KTD7): fixed/percent items are computed against the reference
- * KRW_RUB rate from the config; formula items render an honest placeholder
- * until the real calculator lands in U6.
+ * U5: the lot is converted with the resolved KRW->RUB rate (mirror -> cache
+ * -> config, src/rates/cbr.ts); the rate date is always shown and config-tier
+ * rates carry a preliminary-rate marker.
+ *
+ * U6: rows come from the real all-in calculator (src/calc/customs.ts) — the
+ * lot price, config cost items and the computed customs lines. When the lot
+ * params are unknown (or the lot is an EV) only known items are listed and
+ * the total renders as "расчёт по запросу". Lot params arrive from the caller
+ * (DOM extraction is U7).
  */
 
 import { BADGE_ATTR, type PriceCandidate } from "../scan/scanner";
-import type { LoadedConfig, WidgetConfig } from "../config";
+import type { LoadedConfig } from "../config";
+import type { ResolvedRates } from "../rates/cbr";
+import { computeAllIn, type LotParams } from "../calc/customs";
 import { createOrderButton } from "./order-button";
 
 /** Marker carried by breakdown host elements (idempotency + tests). */
@@ -25,18 +33,11 @@ export function isDetailPage(url: string): boolean {
   return DETAIL_PAGE_RE.test(url);
 }
 
-export interface BreakdownRow {
-  id: string;
-  label: string;
-  /** Rounded RUB amount; null for formula items at the mock stage. */
-  amountRub: number | null;
-}
+/** Lot parameters known to the caller; the price itself comes from the scan. */
+export type BreakdownLotDetails = Omit<LotParams, "priceKrw">;
 
-export interface BreakdownModel {
-  lotRub: number;
-  rows: BreakdownRow[];
-  totalRub: number;
-}
+/** User-facing marker rendered instead of a total that needs a manager. */
+const ON_REQUEST_TEXT = "расчёт по запросу";
 
 /** Grouped RUB amount without the approximation prefix: "120 000 ₽". */
 function formatAmount(value: number): string {
@@ -45,26 +46,6 @@ function formatAmount(value: number): string {
     " ",
   );
   return `${grouped} ₽`;
-}
-
-/** Pure computation of breakdown rows and total from config + lot KRW price. */
-export function computeBreakdown(
-  config: WidgetConfig,
-  krw: number,
-): BreakdownModel {
-  const lotRub = Math.round(krw * config.currency.referenceRates.KRW_RUB);
-  let totalRub = lotRub;
-  const rows: BreakdownRow[] = config.costItems.map((item) => {
-    let amountRub: number | null = null;
-    if (item.kind === "fixed" && typeof item.value === "number") {
-      amountRub = Math.round(item.value);
-    } else if (item.kind === "percent" && typeof item.value === "number") {
-      amountRub = Math.round((lotRub * item.value) / 100);
-    }
-    if (amountRub !== null) totalRub += amountRub;
-    return { id: item.id, label: item.label, amountRub };
-  });
-  return { lotRub, rows, totalRub };
 }
 
 const BREAKDOWN_STYLE = `
@@ -110,12 +91,15 @@ const BREAKDOWN_STYLE = `
     padding-top: 6px;
     font-weight: 700;
   }
-  [data-embedded-marker] {
+  [data-embedded-marker],
+  [data-approx-reason],
+  [data-preliminary-rate] {
     margin-top: 6px;
     color: #a05a00;
     font-size: 12px;
   }
-  [data-note] {
+  [data-note],
+  [data-rate-date] {
     margin-top: 6px;
     color: #6b6f76;
     font-size: 12px;
@@ -163,13 +147,19 @@ function appendRow(
 export function attachBreakdown(
   candidate: PriceCandidate,
   loaded: LoadedConfig,
+  rates: ResolvedRates,
+  lot: BreakdownLotDetails = {},
 ): void {
   const el = candidate.element;
   if (el.querySelector(`[${BREAKDOWN_ATTR}]`) !== null) return;
 
   const doc = el.ownerDocument;
   const { config, source } = loaded;
-  const model = computeBreakdown(config, candidate.krw);
+  const result = computeAllIn(
+    { priceKrw: candidate.krw, ...lot },
+    rates,
+    config,
+  );
 
   const host = doc.createElement("span");
   host.setAttribute(BREAKDOWN_ATTR, "");
@@ -191,19 +181,34 @@ export function attachBreakdown(
 
   const panel = doc.createElement("div");
   panel.setAttribute("data-panel", "");
+  panel.setAttribute("data-precision", result.precision);
   panel.hidden = true;
 
-  appendRow(doc, panel, "lot", "Цена лота", formatAmount(model.lotRub));
-  for (const row of model.rows) {
-    appendRow(
-      doc,
-      panel,
-      row.id,
-      row.label,
-      row.amountRub === null ? "уточняется" : formatAmount(row.amountRub),
-    );
+  for (const item of result.items) {
+    appendRow(doc, panel, item.id, item.label, formatAmount(item.rub));
   }
-  appendRow(doc, panel, "total", "Итого в РФ", formatAmount(model.totalRub));
+  // Under "onRequest" the customs lines are missing, so a numeric total
+  // would be a lie — render the honest marker instead (U6 plan decision).
+  // "approx" totals (partially estimated params, U7) carry the "≈" prefix.
+  appendRow(
+    doc,
+    panel,
+    "total",
+    "Итого в РФ",
+    result.precision === "onRequest"
+      ? ON_REQUEST_TEXT
+      : result.precision === "approx"
+        ? `≈ ${formatAmount(result.totalRub)}`
+        : formatAmount(result.totalRub),
+  );
+
+  if (result.precision === "approx") {
+    // U7/AE1: the user must see WHY the total is approximate.
+    const reason = doc.createElement("div");
+    reason.setAttribute("data-approx-reason", "");
+    reason.textContent = "Приблизительно: не все данные лота видны";
+    panel.appendChild(reason);
+  }
 
   if (source === "embedded") {
     const marker = doc.createElement("div");
@@ -213,10 +218,24 @@ export function attachBreakdown(
     panel.appendChild(marker);
   }
 
+  // Config-tier rates (mirror and cache both unavailable) are preliminary:
+  // same marker pattern as the embedded-config line above (U5, KTD2).
+  if (rates.source === "config") {
+    const preliminary = doc.createElement("div");
+    preliminary.setAttribute("data-preliminary-rate", "");
+    preliminary.textContent = `Курс предварительный (${rates.dateISO}).`;
+    panel.appendChild(preliminary);
+  }
+
+  // The rate date is always visible, whatever tier resolved it (R9, KTD2).
+  const rateDate = doc.createElement("div");
+  rateDate.setAttribute("data-rate-date", "");
+  rateDate.textContent = `Курс ЦБ РФ на ${rates.dateISO}.`;
+  panel.appendChild(rateDate);
+
   const note = doc.createElement("div");
   note.setAttribute("data-note", "");
-  note.textContent =
-    `${config.commissionNote} Курс на ${config.currency.updatedAt}.`.trim();
+  note.textContent = config.commissionNote;
   panel.appendChild(note);
 
   panel.appendChild(createOrderButton(doc, config.messenger));

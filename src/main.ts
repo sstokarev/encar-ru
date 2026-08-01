@@ -1,19 +1,32 @@
 /**
- * encar-ru overlay widget entry point (U1 mock stage, KTD7).
+ * encar-ru overlay widget entry point.
  * Scans the page for KRW prices and annotates each with a RUB badge.
+ *
+ * U5: annotation is gated on FX rate resolution (mirror -> cache -> config,
+ * see src/rates/cbr.ts) — no badge renders a RUB value before the rates are
+ * known.
+ *
+ * U6: the breakdown uses the real customs calculator (src/calc/customs.ts).
+ *
+ * U7: lot params are extracted from the DOM (src/scan/params.ts). Card pages
+ * with full real params compute exactly (badge without "≈"); listings and
+ * degraded cards stay approximate or fall back to "расчёт по запросу".
  */
 
 import { scanPrices } from "./scan/scanner";
 import { observeDom } from "./scan/observer";
+import {
+  extractCardParams,
+  extractListingParams,
+  toLotDetails,
+} from "./scan/params";
+import { lotPrecision } from "./calc/customs";
 import { attachBadge } from "./ui/badge";
 import { attachBreakdown, isDetailPage } from "./ui/breakdown";
 import { loadConfig, type LoadedConfig } from "./config";
+import { resolveRates, type ResolvedRates } from "./rates/cbr";
 
-const VERSION = "0.1.0";
-
-// TODO(U5/U6): placeholder mock rate. Replace with the CBR-resolved KRW->RUB
-// rate (U5) and the real duty/shipping/commission calculator (U6).
-const MOCK_RUB_PER_KRW = 0.055;
+const VERSION = "0.3.0";
 
 interface EncarRuApi {
   version: string;
@@ -34,22 +47,43 @@ export function init(): void {
     return;
   }
 
-  // Config is loaded lazily, once, on the first detail-page scan (U2).
+  // Config and rates are each resolved once and shared by all rescans.
   let configPromise: Promise<LoadedConfig> | null = null;
   const getConfig = (): Promise<LoadedConfig> => {
     if (configPromise === null) configPromise = loadConfig();
     return configPromise;
   };
+  // Rates need the config first: its reference rates anchor the ±30%
+  // plausibility check (KTD2).
+  let ratesPromise: Promise<ResolvedRates> | null = null;
+  const getRates = (): Promise<ResolvedRates> => {
+    if (ratesPromise === null) {
+      ratesPromise = getConfig().then((loaded) => resolveRates(loaded.config));
+    }
+    return ratesPromise;
+  };
 
-  const rescan = (): void => {
+  const annotate = async (): Promise<void> => {
+    const loaded = await getConfig();
+    // U5 gate: nothing is rendered until the rates resolve.
+    const rates = await getRates();
     const detail = isDetailPage(window.location.href);
+    // Card params describe the single lot of the page; listing params are
+    // re-read per price element from its own row (U7).
+    const cardLot = detail ? toLotDetails(extractCardParams(document)) : null;
     for (const candidate of scanPrices(document)) {
-      attachBadge(candidate, MOCK_RUB_PER_KRW);
+      const lot =
+        cardLot ?? toLotDetails(extractListingParams(candidate.element));
+      attachBadge(candidate, rates.krwRub, lotPrecision(lot));
       if (detail) {
         // U2: on the car screen the badge expands into the cost breakdown.
-        void getConfig().then((loaded) => attachBreakdown(candidate, loaded));
+        attachBreakdown(candidate, loaded, rates, lot);
       }
     }
+  };
+
+  const rescan = (): void => {
+    void annotate();
   };
 
   window.__encarRu = { version: VERSION, rescan };

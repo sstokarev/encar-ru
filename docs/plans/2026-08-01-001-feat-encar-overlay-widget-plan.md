@@ -56,7 +56,7 @@ The importer's clients pick cars on encar.com but understand neither Korean nor 
 
 **Delivery and install**
 
-- R6. iPhone/Safari: install via iOS Shortcut from a link; run via Share → "Price in RF" on any encar page.
+- R6. iPhone/Safari: primary path is a **Safari bookmarklet** — save any page as a bookmark, edit it, paste the `javascript:` code, then run it from the bookmarks list while on an encar page. No Shortcuts app, no "Allow Running Scripts", no iCloud link, and the customer can install and test it unaided. The iOS Shortcut (Share → "Price in RF") remains an optional convenience path, deferred until a real device is available for assembly.
 - R7. Chrome (desktop and Android): bookmarklet with the same functionality.
 - R8. Russian-language guide page: install steps for both methods, browser-translation how-to; the importer sends its link to clients.
 
@@ -65,6 +65,7 @@ The importer's clients pick cars on encar.com but understand neither Korean nor 
 - R9. Computation is client-side. FX rates — official CBR rates (KRW and EUR), always current (refreshed at least daily); rate date shown in the breakdown.
 - R10. Commission and tariff parameters live in a simple config the importer edits without an admin UI; new values apply to all subsequent computations.
 - R11. Formulas use public duty data; customer confirmed the math is simple and not a risk.
+- R12. The widget itself translates key recurring encar UI terms (year, mileage, fuel, menus, buttons — bounded dictionary of ~150-200 strings) into Russian, and shows a one-time hint explaining how to enable full-page browser translation for the rest. (Added at Stage B review: browser translation alone proved undiscoverable.)
 
 ### Key Flows
 
@@ -265,6 +266,16 @@ Tree is a shape declaration; per-unit `Files` lists are authoritative.
 - **Approach:** extract params from card DOM; listing heuristic — use what's visible, config averages for the rest with "≈"; align desktop selectors per KTD6.
 - **Test scenarios:** card fixture → all params, no marker; listing fixture → "≈" present; nonstandard param block → degrade to "≈", not an error; desktop fixture → badges work (if desktop viable per U3).
 - **Verification:** `npm test`; live spot-check of exact vs approximate modes.
+
+### U9. Dictionary translation of key UI terms
+
+- **Goal:** widget applies a static Korean→Russian dictionary to recurring encar UI labels (listing rows, card spec labels, key menus/buttons) via the existing MutationObserver; one-time dismissible hint bubble explains enabling full-page browser translation.
+- **Requirements:** R12.
+- **Dependencies:** U7.
+- **Files:** `src/translate/dictionary.ts`, `src/translate/apply.ts`, `test/translate.test.ts`.
+- **Approach:** exact-match (and token-match for composite strings like "16/09식") replacement of text nodes outside the widget's own Shadow DOM; dictionary built from the two fixtures' actual vocabulary; must not break the price scanner (scanner runs first / operates on original text preserved in data-attrs); skips already-browser-translated pages (heuristic: <font> wrappers present → dictionary off).
+- **Test scenarios:** listing fixture → year/mileage/fuel labels rendered in Russian; card fixture → spec labels translated; scanner still finds all prices after translation applied; browser-translated DOM → dictionary no-ops; hint bubble shows once (localStorage flag) and is dismissible.
+- **Verification:** `npm test`; live check — listing and card readable in Russian without browser translation.
 
 ### U8. Guide, polish, acceptance
 

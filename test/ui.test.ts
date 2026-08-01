@@ -7,11 +7,13 @@ import { loadConfig } from "../src/config";
 import { DEFAULT_CONFIG, type WidgetConfig } from "../src/config.default";
 import {
   attachBreakdown,
-  computeBreakdown,
   isDetailPage,
   BREAKDOWN_ATTR,
+  type BreakdownLotDetails,
 } from "../src/ui/breakdown";
+import { computeAllIn } from "../src/calc/customs";
 import { buildOrderLink } from "../src/ui/order-button";
+import type { ResolvedRates } from "../src/rates/cbr";
 import { init } from "../src/main";
 
 function readFixture(name: string): string {
@@ -34,6 +36,7 @@ const REMOTE_CONFIG: WidgetConfig = {
   costItems: [
     { id: "shipping", label: "Доставка", kind: "fixed", value: 100000 },
   ],
+  customs: DEFAULT_CONFIG.customs,
   commissionNote: "Тестовая заметка.",
 };
 
@@ -85,16 +88,32 @@ function rowValue(host: HTMLElement, itemId: string): string {
   return row?.querySelector("[data-value]")?.textContent ?? "";
 }
 
+/** Rates matching the config reference tier (keeps pre-U5 expected values). */
+function ratesFor(config: WidgetConfig): ResolvedRates {
+  return {
+    krwRub: config.currency.referenceRates.KRW_RUB,
+    eurRub: config.currency.referenceRates.EUR_RUB,
+    dateISO: config.currency.updatedAt,
+    source: "cbr",
+  };
+}
+
 /** Attaches a breakdown to a synthetic detail-price element. */
 function attachDirect(
   config: WidgetConfig,
   krw: number,
   source: "remote" | "embedded" = "remote",
+  lot?: BreakdownLotDetails,
 ): HTMLElement {
   const el = document.createElement("span");
   el.setAttribute("data-intl-currency-amount", String(krw));
   document.body.appendChild(el);
-  attachBreakdown({ element: el, krw }, { config, source });
+  attachBreakdown(
+    { element: el, krw },
+    { config, source },
+    ratesFor(config),
+    lot,
+  );
   const host = breakdownHost();
   if (!host) throw new Error("breakdown was not attached");
   return host;
@@ -109,6 +128,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
+  localStorage.clear();
   delete window.__encarRuConfigUrl;
   delete window.__encarRu;
   document.body.innerHTML = "";
@@ -135,6 +155,14 @@ describe("loadConfig", () => {
 
   it("falls back to embedded defaults on malformed payload", async () => {
     stubFetchOk({ nonsense: true } as unknown as WidgetConfig);
+    const loaded = await loadConfig();
+    expect(loaded.source).toBe("embedded");
+    expect(loaded.config).toEqual(DEFAULT_CONFIG);
+  });
+
+  it("falls back to embedded defaults when the customs section is missing", async () => {
+    const { customs: _customs, ...withoutCustoms } = REMOTE_CONFIG;
+    stubFetchOk(withoutCustoms as unknown as WidgetConfig);
     const loaded = await loadConfig();
     expect(loaded.source).toBe("embedded");
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
@@ -181,12 +209,19 @@ describe("breakdown panel", () => {
     costItems: [
       { id: "shipping", label: "Доставка", kind: "fixed", value: 100000 },
       { id: "commission", label: "Комиссия", kind: "percent", value: 10 },
-      { id: "duty", label: "Пошлина", kind: "formula", value: "duty_v1" },
+      { id: "customs", label: "Таможня", kind: "formula", value: "customs_v1" },
     ],
+    customs: DEFAULT_CONFIG.customs,
     commissionNote: "Заметка.",
   };
   // 10,000,000 KRW * 0.05 = 500,000 lot; +100,000 fixed; +10% = 50,000
   const KRW = 10_000_000;
+  /** Full lot params: the customs formulas compute exactly (U6). */
+  const LOT: BreakdownLotDetails = {
+    ageYears: 4,
+    engineCc: 2000,
+    fuel: "gasoline",
+  };
 
   it("tap toggles the panel open and closed", () => {
     const host = attachDirect(CLEAN_CONFIG, KRW);
@@ -203,12 +238,21 @@ describe("breakdown panel", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("lists cost items and total matching the config", () => {
-    const model = computeBreakdown(CLEAN_CONFIG, KRW);
-    expect(model.lotRub).toBe(500_000);
-    expect(model.totalRub).toBe(650_000);
+  it("lists computed cost items and total for a full-params lot", () => {
+    // U6 real math at krwRub 0.05 / eurRub 90 with LOT (age 4, 2000cc):
+    //   lot 500,000; shipping 100,000; commission 10% = 50,000;
+    //   duty 2.7 EUR/cc * 2000 = 5,400 EUR * 90 = 486,000;
+    //   recycling 5,200 (>=3y, <=3000cc); clearance 4,269 (lot <= 1,200,000);
+    //   total 1,145,469.
+    const result = computeAllIn(
+      { priceKrw: KRW, ...LOT },
+      { krwRub: 0.05, eurRub: 90 },
+      CLEAN_CONFIG,
+    );
+    expect(result.precision).toBe("exact");
+    expect(result.totalRub).toBe(1_145_469);
 
-    const host = attachDirect(CLEAN_CONFIG, KRW);
+    const host = attachDirect(CLEAN_CONFIG, KRW, "remote", LOT);
     toggleOf(host).click();
     const panel = panelOf(host);
 
@@ -220,14 +264,44 @@ describe("breakdown panel", () => {
       "shipping",
       "commission",
       "duty",
+      "recycling",
+      "clearance",
       "total",
     ]);
     expect(rowValue(host, "lot")).toBe("500 000 ₽");
     expect(rowValue(host, "shipping")).toBe("100 000 ₽");
     expect(rowValue(host, "commission")).toBe("50 000 ₽");
-    expect(rowValue(host, "total")).toBe("650 000 ₽");
-    // Formula items are honest placeholders at the mock stage (KTD7).
-    expect(rowValue(host, "duty")).not.toMatch(/₽/);
+    expect(rowValue(host, "duty")).toBe("486 000 ₽");
+    expect(rowValue(host, "recycling")).toBe("5 200 ₽");
+    expect(rowValue(host, "clearance")).toBe("4 269 ₽");
+    expect(rowValue(host, "total")).toBe("1 145 469 ₽");
+    expect(panelOf(host).getAttribute("data-precision")).toBe("exact");
+  });
+
+  it("marks the total 'on request' when lot params are unknown", () => {
+    const host = attachDirect(CLEAN_CONFIG, KRW);
+    toggleOf(host).click();
+    const panel = panelOf(host);
+
+    // Customs items are not computable: only known items are listed (U6).
+    const rowIds = Array.from(panel.querySelectorAll("[data-item-id]")).map(
+      (row) => row.getAttribute("data-item-id"),
+    );
+    expect(rowIds).toEqual(["lot", "shipping", "commission", "total"]);
+    expect(rowValue(host, "total")).toBe("расчёт по запросу");
+    expect(panel.getAttribute("data-precision")).toBe("onRequest");
+  });
+
+  it("marks the total 'on request' for an EV lot", () => {
+    const host = attachDirect(CLEAN_CONFIG, KRW, "remote", {
+      ageYears: 2,
+      fuel: "electric",
+    });
+    toggleOf(host).click();
+    expect(rowValue(host, "total")).toBe("расчёт по запросу");
+    expect(
+      panelOf(host).querySelector('[data-item-id="duty"]'),
+    ).toBeNull();
   });
 
   it("keeps the breakdown host untranslatable and idempotent", () => {
@@ -239,6 +313,7 @@ describe("breakdown panel", () => {
     attachBreakdown(
       { element: el, krw: KRW },
       { config: CLEAN_CONFIG, source: "remote" },
+      ratesFor(CLEAN_CONFIG),
     );
     expect(document.querySelectorAll(`[${BREAKDOWN_ATTR}]`).length).toBe(1);
   });
@@ -305,6 +380,7 @@ describe("order button deep links", () => {
         updatedAt: "2026-08-01",
       },
       costItems: [],
+      customs: DEFAULT_CONFIG.customs,
       commissionNote: "",
     };
     const host = attachDirect(config, 10_000_000);
@@ -331,8 +407,11 @@ describe("integration with the widget entry point", () => {
     });
     const host = breakdownHost()!;
     toggleOf(host).click();
-    // 6,590,000 KRW * 0.05 = 329,500 lot; +100,000 shipping = 429,500
+    // 6,590,000 KRW * 0.05 = 329,500 lot. U7 extracts full card params, so
+    // the total is exact; REMOTE_CONFIG has no formula item, hence only the
+    // lot and shipping rows: 329,500 + 100,000 = 429,500.
     expect(rowValue(host, "lot")).toBe("329 500 ₽");
+    expect(rowValue(host, "shipping")).toBe("100 000 ₽");
     expect(rowValue(host, "total")).toBe("429 500 ₽");
     expect(panelOf(host).querySelector("[data-embedded-marker]")).toBeNull();
   });
@@ -346,9 +425,12 @@ describe("integration with the widget entry point", () => {
       expect(breakdownHost()).not.toBeNull();
     });
     const host = breakdownHost()!;
-    // DEFAULT_CONFIG: lot 6,590,000*0.055=362,450; +120,000+85,000; +5%=18,123
+    // DEFAULT_CONFIG: lot 6,590,000 * 0.055 = 362,450. U7 card params
+    // (2016/09, 2199cc diesel, age >5y): + shipping 220,000 + duty
+    // 4.8*2199*90 = 949,968 + recycling 5,200 + clearance 2,134 + sbkts
+    // 45,000 + broker 85,000 + commission 5% = 18,123 -> 1,687,875 exact.
     expect(rowValue(host, "lot")).toBe("362 450 ₽");
-    expect(rowValue(host, "total")).toBe("585 573 ₽");
+    expect(rowValue(host, "total")).toBe("1 687 875 ₽");
     expect(
       panelOf(host).querySelector("[data-embedded-marker]"),
     ).not.toBeNull();

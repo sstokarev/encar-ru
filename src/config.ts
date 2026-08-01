@@ -12,10 +12,15 @@ import {
 } from "./config.default";
 
 export type {
+  ClearanceFeeBracket,
   CostItem,
   CostItemKind,
+  CustomsConfig,
+  DutyPerCcBracket,
+  DutyValueTier,
   MessengerConfig,
   MessengerType,
+  RecyclingFeeConfig,
   WidgetConfig,
 } from "./config.default";
 
@@ -51,6 +56,77 @@ function isCostItem(value: unknown): value is CostItem {
   );
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/**
+ * Validates an ascending bracket array: every entry passes `isEntry`, every
+ * entry but the last carries a finite upper bound under `maxKey`, and the
+ * last entry is open-ended (no bound) so bracket lookup always resolves.
+ */
+function isBracketArray(
+  value: unknown,
+  maxKey: string,
+  isEntry: (entry: Record<string, unknown>) => boolean,
+): boolean {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  return value.every((raw, index) => {
+    if (typeof raw !== "object" || raw === null) return false;
+    const entry = raw as Record<string, unknown>;
+    const last = index === value.length - 1;
+    const bound = entry[maxKey];
+    if (last ? bound !== undefined : !isFiniteNumber(bound)) return false;
+    return isEntry(entry);
+  });
+}
+
+/** Structural validation of the customs tariff section (U6, R10). */
+function isCustomsConfig(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const customs = value as Record<string, unknown>;
+  const labels = customs["labels"] as Record<string, unknown> | undefined;
+  const byAge = customs["dutyPerCcByAge"] as
+    | Record<string, unknown>
+    | undefined;
+  const fee = customs["recyclingFee"] as Record<string, unknown> | undefined;
+  const isPerCc = (entry: Record<string, unknown>): boolean =>
+    isFiniteNumber(entry["eurPerCc"]) && entry["eurPerCc"] > 0;
+  return (
+    typeof customs["asOf"] === "string" &&
+    typeof labels === "object" &&
+    labels !== null &&
+    typeof labels["duty"] === "string" &&
+    typeof labels["recycling"] === "string" &&
+    typeof labels["clearance"] === "string" &&
+    isBracketArray(
+      customs["dutyValueTiers"],
+      "maxEur",
+      (entry) =>
+        isFiniteNumber(entry["pct"]) &&
+        entry["pct"] > 0 &&
+        isFiniteNumber(entry["minPerCc"]) &&
+        entry["minPerCc"] >= 0,
+    ) &&
+    typeof byAge === "object" &&
+    byAge !== null &&
+    isBracketArray(byAge["y3"], "maxCc", isPerCc) &&
+    isBracketArray(byAge["y5plus"], "maxCc", isPerCc) &&
+    typeof fee === "object" &&
+    fee !== null &&
+    isFiniteNumber(fee["smallMaxCc"]) &&
+    isFiniteNumber(fee["smallUnder3yRub"]) &&
+    isFiniteNumber(fee["smallFrom3yRub"]) &&
+    isFiniteNumber(fee["largeUnder3yRub"]) &&
+    isFiniteNumber(fee["largeFrom3yRub"]) &&
+    isBracketArray(
+      customs["clearanceFeeBrackets"],
+      "maxRub",
+      (entry) => isFiniteNumber(entry["fee"]) && entry["fee"] >= 0,
+    )
+  );
+}
+
 /** Structural validation: a malformed remote payload must not reach the UI. */
 function isValidConfig(value: unknown): value is WidgetConfig {
   if (typeof value !== "object" || value === null) return false;
@@ -75,6 +151,7 @@ function isValidConfig(value: unknown): value is WidgetConfig {
     typeof currency?.["updatedAt"] === "string" &&
     Array.isArray(cfg["costItems"]) &&
     cfg["costItems"].every(isCostItem) &&
+    isCustomsConfig(cfg["customs"]) &&
     typeof cfg["commissionNote"] === "string"
   );
 }
