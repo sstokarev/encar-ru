@@ -4,6 +4,12 @@
  * textContent). The host element opts out of browser translation so the
  * badge text is never rewritten.
  *
+ * The badge shows the all-in ("под ключ") total computed by
+ * src/calc/customs.ts — the same number the breakdown totals (R1). It never
+ * shows the bare converted lot price: that figure is not what the client
+ * pays. When the lot params do not allow a customs computation the badge
+ * says "по запросу" instead of inventing a number (R3, KTD3).
+ *
  * U8: the badge must never disturb the host page layout. Two defenses:
  *  1. Placement — the badge is inserted *after* the price element and the
  *     unit tail that belongs to it ("659" + "만원"), so the site's own price
@@ -14,10 +20,13 @@
  */
 
 import { ANNOTATED_ATTR, BADGE_ATTR, type PriceCandidate } from "../scan/scanner";
-import type { Precision } from "../calc/customs";
+import type { AllInResult } from "../calc/customs";
 
 /** Marker shared by every widget host element (badge, breakdown). */
 export const WIDGET_HOST_ATTR = "data-encar-ru-host";
+
+/** Short user-facing marker shown instead of a total that needs a manager. */
+const ON_REQUEST_TEXT = "по запросу";
 
 /** Attribute encar uses for the "만원" unit span on fem detail pages. */
 const UNIT_ATTR = "data-intl-currency-unit";
@@ -142,16 +151,29 @@ export function applyHostLayoutGuards(host: HTMLElement): void {
   host.style.float = "none";
 }
 
+/** All-in figures the badge renders; the shape computeAllIn() returns. */
+export type BadgeTotal = Pick<AllInResult, "totalRub" | "precision">;
+
+/**
+ * Badge text for an all-in result: "1 701 437 ₽" when exact, "≈ 1 701 437 ₽"
+ * when computed from estimated params, and the honest "по запросу" when the
+ * customs items are not computable — an "onRequest" total covers known items
+ * only, so rendering it would understate the price (U6/U7, R3).
+ */
+export function badgeText(allIn: BadgeTotal): string {
+  if (allIn.precision === "onRequest") return ON_REQUEST_TEXT;
+  return formatRub(allIn.totalRub, allIn.precision !== "exact");
+}
+
 /**
  * Marks the price element as annotated and inserts a Shadow DOM badge with
- * the converted RUB value. Idempotent: a second call for the same element
- * is a no-op thanks to the data-attribute marker. Only exact precision
- * drops the "≈" marker (U7, R3): listings and degraded cards keep it.
+ * the all-in RUB total. Idempotent: a second call for the same element is a
+ * no-op thanks to the data-attribute marker. Only exact precision drops the
+ * "≈" marker (U7, R3): listings and degraded cards keep it.
  */
 export function attachBadge(
   candidate: PriceCandidate,
-  rubPerKrw: number,
-  precision: Precision = "approx",
+  allIn: BadgeTotal,
 ): void {
   const el = candidate.element;
   if (el.hasAttribute(ANNOTATED_ATTR)) return;
@@ -168,10 +190,7 @@ export function attachBadge(
   const style = doc.createElement("style");
   style.textContent = BADGE_STYLE;
   const label = doc.createElement("span");
-  label.textContent = formatRub(
-    candidate.krw * rubPerKrw,
-    precision !== "exact",
-  );
+  label.textContent = badgeText(allIn);
   shadow.append(style, label);
 
   insertWidgetHost(el, host);

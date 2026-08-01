@@ -139,6 +139,7 @@ afterEach(() => {
   delete window.__encarRuConfigUrl;
   delete window.__encarRu;
   document.body.innerHTML = "";
+  window.history.replaceState(null, "", "/");
 });
 
 describe("resolveRates: mirror tier", () => {
@@ -332,6 +333,8 @@ describe("async gate: no RUB before rates resolve", () => {
 
     const parsed = new DOMParser().parseFromString(CARD_HTML, "text/html");
     document.body.innerHTML = parsed.body.innerHTML;
+    // Card pages are detail URLs: full lot params, hence an exact total.
+    window.history.replaceState(null, "", "/cars/detail/41756847");
     init();
 
     // Let the config fetch settle while the rates fetch stays pending.
@@ -344,9 +347,11 @@ describe("async gate: no RUB before rates resolve", () => {
       expect(document.querySelector("[data-encar-ru-badge]")).not.toBeNull();
     });
     const badge = document.querySelector<HTMLElement>("[data-encar-ru-badge]")!;
-    // 6,590,000 KRW * 0.0555 = 365,745 RUB.
+    // The badge shows the all-in total at the resolved mirror rate:
+    // lot 6,590,000 KRW * 0.0555 = 365,745 + shipping 100,000 (TEST_CONFIG
+    // carries no customs formula item) = 465,745 RUB.
     expect(badge.shadowRoot?.querySelector("span")?.textContent).toBe(
-      "≈ 365 745 ₽",
+      "465 745 ₽",
     );
   });
 });

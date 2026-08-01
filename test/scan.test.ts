@@ -4,6 +4,9 @@ import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parsePriceText } from "../src/scan/scanner";
+import { extractCardParams, toLotDetails } from "../src/scan/params";
+import { computeAllIn } from "../src/calc/customs";
+import { DEFAULT_CONFIG } from "../src/config.default";
 import { init } from "../src/main";
 import {
   emulateBrowserTranslation,
@@ -17,6 +20,41 @@ function readFixture(name: string): string {
 
 const LISTING_HTML = readFixture("listing-desktop.html");
 const CARD_HTML = readFixture("card-fem.html");
+const DETAIL_PATH = "/cars/detail/41756847";
+
+/** 659만원 — the single price of the card fixture. */
+const CARD_KRW = 6_590_000;
+
+/** Rates the config tier yields with the network stubbed out (KTD2). */
+const CONFIG_RATES = {
+  krwRub: DEFAULT_CONFIG.currency.referenceRates.KRW_RUB,
+  eurRub: DEFAULT_CONFIG.currency.referenceRates.EUR_RUB,
+};
+
+/** Space-grouped RUB amount, mirroring the badge format. */
+function groupRub(value: number): string {
+  return `${String(value).replace(/\B(?=(\d{3})+(?!\d))/g, " ")} ₽`;
+}
+
+/**
+ * All-in ("под ключ") total the card fixture must headline — derived from the
+ * embedded config and the config-tier rate rather than hardcoded. The card
+ * params are complete, so the precision is exact and the text carries no "≈".
+ */
+const CARD_ALL_IN_TEXT = groupRub(
+  computeAllIn(
+    {
+      priceKrw: CARD_KRW,
+      ...toLotDetails(
+        extractCardParams(
+          new DOMParser().parseFromString(CARD_HTML, "text/html"),
+        ),
+      ),
+    },
+    CONFIG_RATES,
+    DEFAULT_CONFIG,
+  ).totalRub,
+);
 
 // Ground truth for the desktop listing fixture, established by three
 // independent counts (raw-HTML pattern grep, deepest-element DOM walk,
@@ -70,6 +108,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
   document.body.innerHTML = "";
+  window.history.replaceState(null, "", "/");
 });
 
 describe("price parsing", () => {
@@ -95,11 +134,20 @@ describe("desktop listing fixture", () => {
     await runWidget();
     const hosts = badgeHosts();
     expect(hosts.length).toBeGreaterThan(0);
+    const texts = hosts.map(badgeText);
     for (const host of hosts) {
       expect(host.getAttribute("translate")).toBe("no");
       expect(host.classList.contains("notranslate")).toBe(true);
-      expect(badgeText(host)).toMatch(/^≈ \d{1,3}( \d{3})* ₽$/);
+      // Listing badges show the approximate all-in total; rows whose engine
+      // displacement is not visible show the honest marker instead of an
+      // invented number (R3).
+      expect(badgeText(host)).toMatch(/^(≈ \d{1,3}( \d{3})* ₽|по запросу)$/);
     }
+    // Most rows do expose a displacement in the model title, so the listing
+    // is not a wall of "по запросу".
+    expect(texts.filter((t) => t.startsWith("≈ ")).length).toBeGreaterThan(
+      hosts.length / 2,
+    );
   });
 
   it("adds no duplicate badges when run repeatedly", async () => {
@@ -113,13 +161,14 @@ describe("desktop listing fixture", () => {
 });
 
 describe("fem card fixture", () => {
-  it("annotates the main price with the config-tier RUB value", async () => {
+  it("annotates the main price with the all-in RUB total", async () => {
+    // A real card page is a detail URL, so the exact card params apply.
+    window.history.replaceState(null, "", DETAIL_PATH);
     loadFixture(CARD_HTML);
     await runWidget();
     const hosts = badgeHosts();
     expect(hosts.length).toBe(1);
-    // 659만원 = 6,590,000 KRW; 6,590,000 * 0.055 = 362,450 RUB (config tier)
-    expect(badgeText(hosts[0]!)).toBe("≈ 362 450 ₽");
+    expect(badgeText(hosts[0]!)).toBe(CARD_ALL_IN_TEXT);
     expect(hosts[0]!.closest("[data-intl-currency]")).not.toBeNull();
   });
 });
@@ -135,12 +184,15 @@ describe("browser-translated DOM", () => {
     });
 
     it(`card (${variant}) still annotates the main price`, async () => {
+      window.history.replaceState(null, "", DETAIL_PATH);
       loadFixture(CARD_HTML);
       emulateBrowserTranslation(document.body, variant);
       await runWidget();
       const hosts = badgeHosts();
       expect(hosts.length).toBe(1);
-      expect(badgeText(hosts[0]!)).toBe("≈ 362 450 ₽");
+      // Lot params come from the inline SPA state, which translation never
+      // touches: the all-in total is identical to the untranslated page.
+      expect(badgeText(hosts[0]!)).toBe(CARD_ALL_IN_TEXT);
     });
   }
 });
@@ -152,8 +204,9 @@ describe("regex fallback", () => {
     await runWidget();
     const texts = badgeHosts().map(badgeText);
     expect(badgeHosts().length).toBe(2);
-    expect(texts).toContain("≈ 687 500 ₽"); // 12,500,000 KRW * 0.055
-    expect(texts).toContain("≈ 363 000 ₽"); // 6,600,000 KRW * 0.055
+    // Bare markup exposes no lot params, so no all-in total is computable:
+    // the badge says so instead of showing a number (R3).
+    expect(texts).toEqual(["по запросу", "по запросу"]);
   });
 });
 

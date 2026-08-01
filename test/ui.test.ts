@@ -11,7 +11,7 @@ import {
   BREAKDOWN_ATTR,
   type BreakdownLotDetails,
 } from "../src/ui/breakdown";
-import { attachBadge } from "../src/ui/badge";
+import { attachBadge, type BadgeTotal } from "../src/ui/badge";
 import { computeAllIn } from "../src/calc/customs";
 import { buildOrderLink } from "../src/ui/order-button";
 import type { ResolvedRates } from "../src/rates/cbr";
@@ -477,12 +477,41 @@ describe("badge placement (U8)", () => {
   it("badge styles stay inherit-based with a px floor", () => {
     const el = document.createElement("span");
     document.body.appendChild(el);
-    attachBadge({ element: el, krw: 10_000_000 }, 0.05);
+    attachBadge(
+      { element: el, krw: 10_000_000 },
+      { totalRub: 1_145_469, precision: "exact" },
+    );
     const badge = badgeHosts()[0]!;
     const css = badge.shadowRoot?.querySelector("style")?.textContent ?? "";
     expect(css).toContain("font-size: max(11px, 0.9em)");
     expect(css).toContain("white-space: nowrap");
     expect(css).toContain("vertical-align: middle");
+  });
+});
+
+describe("badge total (R1)", () => {
+  /** Attaches a badge to a fresh element and returns its rendered text. */
+  function badgeLabel(allIn: BadgeTotal): string {
+    const el = document.createElement("span");
+    document.body.appendChild(el);
+    attachBadge({ element: el, krw: 6_590_000 }, allIn);
+    const hosts = badgeHosts();
+    const host = hosts[hosts.length - 1];
+    return host?.shadowRoot?.querySelector("span")?.textContent ?? "";
+  }
+
+  it("shows the all-in total, marked according to its precision", () => {
+    expect(badgeLabel({ totalRub: 1_701_437, precision: "exact" })).toBe(
+      "1 701 437 ₽",
+    );
+    expect(badgeLabel({ totalRub: 1_701_437, precision: "approx" })).toBe(
+      "≈ 1 701 437 ₽",
+    );
+    // An "onRequest" total covers known items only — showing it would
+    // understate the price, so the badge says "по запросу" instead.
+    expect(badgeLabel({ totalRub: 620_000, precision: "onRequest" })).toBe(
+      "по запросу",
+    );
   });
 });
 

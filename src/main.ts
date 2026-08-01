@@ -6,11 +6,13 @@
  * see src/rates/cbr.ts) — no badge renders a RUB value before the rates are
  * known.
  *
- * U6: the breakdown uses the real customs calculator (src/calc/customs.ts).
+ * U6: badge and breakdown both come from the real customs calculator
+ * (src/calc/customs.ts) — the badge shows the all-in total, the breakdown
+ * itemises the same number.
  *
  * U7: lot params are extracted from the DOM (src/scan/params.ts). Card pages
  * with full real params compute exactly (badge without "≈"); listings and
- * degraded cards stay approximate or fall back to "расчёт по запросу".
+ * degraded cards stay approximate or fall back to "по запросу".
  *
  * U9: after every scan pass the ko->ru dictionary is applied to the page
  * (src/translate/apply.ts), and the one-time browser-translation hint is
@@ -24,7 +26,7 @@ import {
   extractListingParams,
   toLotDetails,
 } from "./scan/params";
-import { lotPrecision } from "./calc/customs";
+import { computeAllIn } from "./calc/customs";
 import { attachBadge } from "./ui/badge";
 import { attachBreakdown, isDetailPage } from "./ui/breakdown";
 import { loadConfig, type LoadedConfig } from "./config";
@@ -80,7 +82,17 @@ export function init(): void {
     for (const candidate of candidates) {
       const lot =
         cardLot ?? toLotDetails(extractListingParams(candidate.element));
-      attachBadge(candidate, rates.krwRub, lotPrecision(lot));
+      // The badge headlines the all-in ("под ключ") total, not the converted
+      // lot price (R1). computeAllIn is pure and cheap, and config/rates are
+      // resolved once above, so a per-candidate call costs nothing; the
+      // breakdown recomputes from the same inputs and therefore always shows
+      // the identical number.
+      const allIn = computeAllIn(
+        { priceKrw: candidate.krw, ...lot },
+        rates,
+        loaded.config,
+      );
+      attachBadge(candidate, allIn);
       if (detail) {
         // U2: on the car screen the badge expands into the cost breakdown.
         attachBreakdown(candidate, loaded, rates, lot);

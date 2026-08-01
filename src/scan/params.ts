@@ -233,7 +233,14 @@ export function extractListingParams(priceEl: Element): DomLotParams {
   if (fuel !== null) params.fuel = fuel;
 
   // Model title ("2.2 디젤 프레스티지") is the only cc source in listings.
-  const title = row.querySelector(".dtl, .cls")?.textContent ?? text;
+  // ".dtl" must be preferred explicitly: a single ".dtl, .cls" query returns
+  // whichever comes first in document order, and that is always ".cls" (the
+  // brand + model name, which never carries a displacement).
+  // The whole row text is NOT a cc source: it also carries mileage, price
+  // and dealer notes, and a "1.6" picked out of those would silently drive
+  // the badge total. No title element -> no displacement (R3 degradation).
+  const titleEl = row.querySelector(".dtl") ?? row.querySelector(".cls");
+  const title = titleEl?.textContent ?? "";
   const cc = estimateCcFromText(title);
   if (cc !== null) params.engineCc = cc;
 

@@ -202,7 +202,7 @@ describe("listing fixture params", () => {
 });
 
 describe("degradation on nonstandard blocks", () => {
-  it("degrades to approximate instead of throwing", async () => {
+  it("degrades to an honest marker instead of throwing", async () => {
     document.body.innerHTML =
       '<div><span class="prc"><strong>800</strong>만원</span>' +
       "<span>연식정보없음 · 미확인</span></div>";
@@ -212,19 +212,24 @@ describe("degradation on nonstandard blocks", () => {
     await runWidget();
     const hosts = badgeHosts();
     expect(hosts.length).toBe(1);
-    expect(badgeText(hosts[0]!)).toMatch(/^≈ /);
+    // No year and no displacement: the all-in total is not computable, so
+    // the badge shows the marker rather than an invented number.
+    expect(badgeText(hosts[0]!)).toBe("по запросу");
   });
 });
 
 describe("precision wiring (AE1)", () => {
-  it("listing badges always carry the approximation marker", async () => {
+  it("listing badges never claim exact precision", async () => {
     loadFixture(LISTING_HTML);
     await runWidget();
     const hosts = badgeHosts();
     expect(hosts.length).toBeGreaterThan(0);
     for (const host of hosts) {
-      expect(badgeText(host)).toMatch(/^≈ /);
+      // Either an approximate all-in total or the honest marker — never a
+      // bare (exact-looking) number.
+      expect(badgeText(host)).toMatch(/^(≈ |по запросу$)/);
     }
+    expect(hosts.some((h) => badgeText(h).startsWith("≈ "))).toBe(true);
   });
 
   it("card with full params computes exactly, without the marker", async () => {
@@ -234,8 +239,9 @@ describe("precision wiring (AE1)", () => {
 
     const hosts = badgeHosts();
     expect(hosts.length).toBe(1);
-    // 6,590,000 KRW * 0.055 = 362,450 RUB — exact, no "≈" prefix.
-    expect(badgeText(hosts[0]!)).toBe("362 450 ₽");
+    // The badge shows the all-in ("под ключ") total, not the lot price:
+    // exact precision, so no "≈" prefix.
+    expect(badgeText(hosts[0]!)).toBe("1 687 875 ₽");
 
     const panel = breakdownPanel();
     expect(panel.getAttribute("data-precision")).toBe("exact");
@@ -245,6 +251,18 @@ describe("precision wiring (AE1)", () => {
     //   + commission 5% = 18,123 -> total 1,687,875.
     expect(totalValue(panel)).toBe("1 687 875 ₽");
     expect(panel.querySelector("[data-approx-reason]")).toBeNull();
+  });
+
+  it("badge and breakdown always show the same total for the same lot", async () => {
+    window.history.replaceState(null, "", DETAIL_PATH);
+    loadFixture(CARD_HTML);
+    await runWidget();
+
+    const hosts = badgeHosts();
+    expect(hosts.length).toBe(1);
+    // Same rendered string, hence the same number: the badge is the
+    // headline of the breakdown it expands into (R1).
+    expect(badgeText(hosts[0]!)).toBe(totalValue(breakdownPanel()));
   });
 
   it("card with an estimated cc degrades to approx with a reason line", async () => {
@@ -260,7 +278,7 @@ describe("precision wiring (AE1)", () => {
 
     const hosts = badgeHosts();
     expect(hosts.length).toBe(1);
-    expect(badgeText(hosts[0]!)).toBe("≈ 362 450 ₽");
+    expect(badgeText(hosts[0]!)).toBe("≈ 1 687 875 ₽");
 
     const panel = breakdownPanel();
     expect(panel.getAttribute("data-precision")).toBe("approx");
@@ -289,7 +307,9 @@ describe("precision wiring (AE1)", () => {
 
     const hosts = badgeHosts();
     expect(hosts.length).toBe(1);
-    expect(badgeText(hosts[0]!)).toMatch(/^≈ /);
+    // EV customs are quoted manually: the badge shows the short marker, the
+    // breakdown its long form — neither invents a number.
+    expect(badgeText(hosts[0]!)).toBe("по запросу");
     const panel = breakdownPanel();
     expect(panel.getAttribute("data-precision")).toBe("onRequest");
     expect(totalValue(panel)).toBe("расчёт по запросу");
