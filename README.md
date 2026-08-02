@@ -6,10 +6,27 @@ Overlay widget for encar.com: injects all-in RUB prices next to KRW prices for c
 
 ```bash
 npm install
-npm test              # vitest, fixture-based DOM tests
-npm run build         # esbuild -> site/widget.js
-node scripts/build-bookmarklet.mjs   # -> site/bookmarklet.txt
+npm test                  # vitest, fixture-based DOM tests
+npm run build             # esbuild -> site/widget.js
+npm run build:bookmarklet # -> site/bookmarklet.txt
+npm run build:extension   # -> extension/widget.js, site/encar-ru-extension.zip
 ```
+
+Two delivery paths, same core:
+
+- **Extension (desktop Chrome/Edge/Opera/Яндекс)** — installed once, the content
+  script runs on every `*.encar.com` page by itself. MV3 forbids remotely hosted
+  code, so `widget.js` is bundled INTO the extension: a core fix reaches those
+  clients only when they reinstall. `manifest.json`'s version must equal
+  `VERSION` in `src/main.ts` — the build fails otherwise.
+- **Bookmarklet (iPhone, and desktop without an extension)** — a thin loader
+  that fetches the core from Pages, so core fixes reach those clients on the
+  next tap. It cannot survive a page load: encar navigates normally between
+  `www` and `fem`, so it is one tap per page. iOS Safari has no extension path
+  that avoids the App Store.
+
+`config.json` and the CBR rates stay remote for BOTH paths — they are data, not
+code, so the importer can change tariffs without shipping anything.
 
 Deploy: push to `main` → GitHub Actions builds and publishes `site/` to Pages.
 

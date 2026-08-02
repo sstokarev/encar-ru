@@ -1,3 +1,5 @@
 node_modules/
 site/widget.js
 site/bookmarklet.txt
+site/encar-ru-extension.zip
+extension/widget.js

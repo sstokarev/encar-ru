@@ -30,6 +30,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: node scripts/build-bookmarklet.mjs
+      - run: node scripts/build-extension.mjs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

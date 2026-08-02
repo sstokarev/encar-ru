@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Encar по-русски — цена под ключ в РФ",
+  "version": "0.3.0",
+  "description": "Показывает рядом с ценой на encar.com цену автомобиля под ключ в рублях и полный расчёт.",
+  "content_scripts": [
+    {
+      "matches": ["*://*.encar.com/*"],
+      "js": ["widget.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}
