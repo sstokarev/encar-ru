@@ -15,9 +15,20 @@
  *  1. Placement — the badge is inserted *after* the price element and the
  *     unit tail that belongs to it ("659" + "만원"), so the site's own price
  *     text is never split and the unit can never be pushed to its own line.
- *  2. Sizing — the host is a nowrap inline-block with inherit-based font
- *     sizing (0.9em with a px floor), declared inline so host-page CSS
- *     (which outranks :host rules) cannot turn it into a block.
+ *  2. Sizing — the host has inherit-based font sizing (0.9em with a px floor)
+ *     and its layout is declared inline, because host-page CSS outranks
+ *     :host rules.
+ *
+ * U12 (customer feedback "вёрстка кривоватая"): the RUB price is a LINE OF ITS
+ * OWN under the Korean price, not a chip wedged in beside it. Sitting inline it
+ * had to share whatever space the row's price cell had left — the gap between
+ * the two numbers varied per layout, and in a narrow cell the row grew a second
+ * line anyway, in an arbitrary place. As a block-level row directly under the
+ * price the spacing is one constant (BADGE_GAP_PX) everywhere, and the badge
+ * inherits the price cell's own text alignment, so it lines up with the Korean
+ * price in all three encar listing shapes: an inline .prc inside a block .val,
+ * a .prc_hs table cell (right-aligned column) and a block .val. The insertion
+ * point is unchanged — the price text and its 만원 unit still stay together.
  *
  * U10: the visual language is encar's own — the page font is inherited
  * (Pretendard on encar), the chip is a white surface with a hairline border
@@ -96,13 +107,14 @@ const BADGE_STYLE = `
     all: initial;
     /* Encar's font (Pretendard) is inherited from the page, never redeclared. */
     font-family: inherit;
-    display: inline-block;
+    display: block;
     white-space: nowrap;
-    vertical-align: middle;
+    /* Follows the price cell's own alignment (right in the table column). */
+    text-align: inherit;
   }
   [data-chip] {
     display: inline-block;
-    margin: 0 0 0 0.35em;
+    margin: 0;
     padding: 0.1em 0.45em;
     border: 1px solid ${ENCAR.border};
     border-radius: 6px;
@@ -257,12 +269,29 @@ export function detachBadge(price: Element): void {
   }
 }
 
-/** Inline layout guards: host-page CSS outranks :host rules in the shadow. */
+/** Constant gap between the Korean price and the RUB line under it (U12). */
+export const BADGE_GAP_PX = 4;
+
+/**
+ * Layout guards for the listing badge: a line of its own directly under the
+ * price, with one constant gap everywhere (U12). Declared inline because
+ * host-page CSS outranks the shadow's own :host rules.
+ *
+ * `vertical-align` is still set: the host may be laid out as a table-cell's
+ * block child or, on a legacy row, as an inline-level box, and leaving the
+ * property to the page produced a half-line wobble between rows.
+ */
 export function applyHostLayoutGuards(host: HTMLElement): void {
-  host.style.display = "inline-block";
+  host.style.display = "block";
   host.style.whiteSpace = "nowrap";
-  host.style.verticalAlign = "middle";
+  host.style.verticalAlign = "baseline";
+  host.style.margin = `${BADGE_GAP_PX}px 0 0`;
   host.style.float = "none";
+  // The badge follows the price column's alignment instead of imposing one:
+  // right-aligned price cells keep their right edge, left-aligned cards stay
+  // left. Only a block-level row can do this — an inline chip sat wherever the
+  // price text happened to end.
+  host.style.textAlign = "inherit";
 }
 
 /**

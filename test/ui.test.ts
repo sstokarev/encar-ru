@@ -11,7 +11,7 @@ import {
   BREAKDOWN_ATTR,
   type BreakdownLotDetails,
 } from "../src/ui/breakdown";
-import { attachBadge, type BadgeTotal } from "../src/ui/badge";
+import { BADGE_GAP_PX, attachBadge, type BadgeTotal } from "../src/ui/badge";
 import { computeAllIn } from "../src/calc/customs";
 import { buildOrderLink } from "../src/ui/order-button";
 import type { ResolvedRates } from "../src/rates/cbr";
@@ -613,7 +613,7 @@ describe("badge placement (U8)", () => {
     expect(price.querySelector("[data-encar-ru-host]")).toBeNull();
   });
 
-  it("badge hosts are nowrap inline-blocks that never split a price", async () => {
+  it("gives every listing badge its own line under the price (U12)", async () => {
     stubFetchOk(REMOTE_CONFIG);
     window.history.replaceState(null, "", "/search/all");
     loadFixture(LISTING_HTML);
@@ -623,9 +623,15 @@ describe("badge placement (U8)", () => {
     });
 
     for (const host of badgeHosts()) {
-      expect(host.style.display).toBe("inline-block");
+      // A row of its own: the RUB price is never wedged in beside the Korean
+      // one, where the gap depended on whatever space the price cell had left.
+      expect(host.style.display).toBe("block");
       expect(host.style.whiteSpace).toBe("nowrap");
-      expect(host.style.verticalAlign).toBe("middle");
+      expect(host.style.float).toBe("none");
+      // One constant gap for every row, and the price cell's own alignment.
+      expect(host.style.margin).toBe(`${BADGE_GAP_PX}px 0px 0px`);
+      expect(host.style.textAlign).toBe("inherit");
+      // The number itself must still never be broken away from its 만원 unit.
       expect(splitsPriceText(host)).toBe(false);
     }
   });
@@ -641,7 +647,9 @@ describe("badge placement (U8)", () => {
     const css = badge.shadowRoot?.querySelector("style")?.textContent ?? "";
     expect(css).toContain("font-size: max(11px, 0.9em)");
     expect(css).toContain("white-space: nowrap");
-    expect(css).toContain("vertical-align: middle");
+    // The chip carries no side margin of its own: the gap to the price above
+    // is the host's, so it stays the same in every listing shape (U12).
+    expect(css).toContain("margin: 0;");
   });
 
   it("renders the listing chip in encar's design language", () => {
