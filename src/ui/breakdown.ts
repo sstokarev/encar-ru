@@ -16,6 +16,14 @@
  * the total renders as "расчёт по запросу". Lot params arrive from the caller
  * (DOM extraction is U7).
  *
+ * An individual cost item may also be undeterminable on its own (an item the
+ * calculator cannot turn into a number, or the whole customs block when the
+ * displacement is unknown). Such a row is NOT dropped: it keeps its label and
+ * shows a muted em dash, a note spells out which items are still missing from
+ * the sum, and the total is presented as a lower bound ("от N ₽") rather than
+ * as an approximation — a partial sum can only grow, and "≈" would suggest it
+ * might also come out lower.
+ *
  * U8: the panel is a self-contained overlay, not an in-flow block — it used
  * to expand inside encar's price box and collide with the site's own
  * controls. Wide viewports get a card anchored to the toggle (position:
@@ -44,6 +52,8 @@ import {
   badgeText,
   detailAnchor,
   findWidgetHost,
+  formatAmountRub,
+  formatRub,
   insertBlockHost,
   isDegraded,
   markDegraded,
@@ -65,6 +75,16 @@ export type BreakdownLotDetails = Omit<LotParams, "priceKrw">;
 
 /** User-facing marker rendered instead of a total that needs a manager. */
 const ON_REQUEST_TEXT = "расчёт по запросу";
+
+/**
+ * Value of a cost item that is not determinable yet. An em dash, not a blank
+ * and not a dropped row: the customer must see WHAT is still missing from the
+ * sum, otherwise a total that is short by exactly that item looks complete.
+ */
+const UNKNOWN_VALUE = "—";
+
+/** Marker attribute of a row whose amount is not determinable yet. */
+const UNKNOWN_ATTR = "data-unknown";
 
 /** Panel title, also its accessible name. */
 const PANEL_TITLE = "Цена под ключ в РФ";
@@ -94,13 +114,15 @@ const ANCHOR_GAP_PX = 8;
 const attachedHosts = new WeakMap<Element, HTMLElement>();
 const hostPrices = new WeakMap<Element, Element>();
 
-/** Grouped RUB amount without the approximation prefix: "120 000 ₽". */
-function formatAmount(value: number): string {
-  const grouped = String(Math.round(value)).replace(
-    /\B(?=(\d{3})+(?!\d))/g,
-    " ",
-  );
-  return `${grouped} ₽`;
+/**
+ * Amount a cost row shows: the grouped RUB figure, or the em dash when the
+ * calculator could not determine it (a missing/non-finite amount is treated
+ * the same way — an unusable number is not data).
+ */
+function rowAmount(rub: number | undefined): string {
+  return typeof rub === "number" && Number.isFinite(rub)
+    ? formatAmountRub(rub)
+    : UNKNOWN_VALUE;
 }
 
 const BREAKDOWN_STYLE = `
@@ -242,6 +264,13 @@ const BREAKDOWN_STYLE = `
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
+  /* Not determinable yet: the row stays visible but reads as pending, so the
+     dash is never mistaken for a zero. */
+  [data-row][${UNKNOWN_ATTR}] [data-label],
+  [data-row][${UNKNOWN_ATTR}] [data-value] {
+    color: ${ENCAR.note};
+    font-weight: 400;
+  }
   [data-row="total"] {
     margin-top: 4px;
     border-top: 1px solid ${ENCAR.border};
@@ -260,6 +289,7 @@ const BREAKDOWN_STYLE = `
   }
   [data-embedded-marker],
   [data-approx-reason],
+  [data-pending-note],
   [data-calc-note],
   [data-rejected-rate],
   [data-preliminary-rate] {
@@ -315,10 +345,12 @@ function appendRow(
   id: string,
   label: string,
   value: string,
+  unknown: boolean = false,
 ): void {
   const row = doc.createElement("div");
   row.setAttribute("data-row", id === "total" ? "total" : "item");
   row.setAttribute("data-item-id", id);
+  if (unknown) row.setAttribute(UNKNOWN_ATTR, "");
   const labelEl = doc.createElement("span");
   labelEl.setAttribute("data-label", "");
   labelEl.textContent = label;
@@ -469,12 +501,22 @@ export function attachBreakdown(
   rows.setAttribute("data-rows", "");
   panel.appendChild(rows);
 
+  // A cost item the calculator could not determine (an unhandled item, or the
+  // whole customs block when the displacement is unknown) keeps its row and
+  // shows a dash: the sum below is then short by exactly these lines, and the
+  // customer has to be able to see which ones.
+  const pending: string[] = [];
   for (const item of result.items) {
-    appendRow(doc, rows, item.id, item.label, formatAmount(item.rub));
+    const rub: number | undefined = item.rub;
+    const value = rowAmount(rub);
+    const unknown = value === UNKNOWN_VALUE;
+    if (unknown) pending.push(item.label);
+    appendRow(doc, rows, item.id, item.label, value, unknown);
   }
   // Under "onRequest" the customs lines are missing, so a numeric total
   // would be a lie — render the honest marker instead (U6 plan decision).
-  // "approx" totals (partially estimated params, U7) carry the "≈" prefix.
+  // "approx" totals (partially estimated params, U7) carry the "≈" prefix,
+  // "partial" ones (items still undetermined) the lower-bound "от".
   appendRow(
     doc,
     rows,
@@ -482,14 +524,21 @@ export function attachBreakdown(
     "Итого в РФ",
     result.precision === "onRequest"
       ? ON_REQUEST_TEXT
-      : result.precision === "approx"
-        ? `≈ ${formatAmount(result.totalRub)}`
-        : formatAmount(result.totalRub),
+      : formatRub(result.totalRub, result.precision),
   );
 
   const notes = doc.createElement("div");
   notes.setAttribute("data-notes", "");
   panel.appendChild(notes);
+
+  // Spells out, in words, what the dashes above mean for the price: the total
+  // is a lower bound and these items will still be added to it.
+  if (pending.length > 0) {
+    const pendingNote = doc.createElement("div");
+    pendingNote.setAttribute("data-pending-note", "");
+    pendingNote.textContent = `В сумму пока не входят: ${pending.join(", ")}. Итоговая цена будет выше.`;
+    notes.appendChild(pendingNote);
+  }
 
   if (result.precision === "approx") {
     // U7/AE1: the user must see WHY the total is approximate.

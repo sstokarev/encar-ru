@@ -129,7 +129,7 @@ function hasLeaseSignal(el: Element): boolean {
 
   const parent = el.parentElement;
   if (parent === null) return false;
-  for (const node of Array.from(parent.childNodes)) {
+  for (const node of [...parent.childNodes]) {
     if (node === el) continue;
     if (node.nodeType === 3) {
       if (LEASE_TEXT_RE.test((node as Text).data)) return true;
@@ -200,7 +200,7 @@ export function scanPrices(
   for (const root of scanRoots) {
     const elements: Element[] = [];
     if (root.matches(PRICE_ELEMENT_SELECTOR)) elements.push(root);
-    elements.push(...Array.from(root.querySelectorAll(PRICE_ELEMENT_SELECTOR)));
+    elements.push(...root.querySelectorAll(PRICE_ELEMENT_SELECTOR));
     for (const el of elements) {
       if (NON_CONTENT_TAGS.has(el.tagName)) continue;
       if (isAlreadyHandled(el)) continue;

@@ -7,6 +7,7 @@ import { parsePriceText, scanPrices } from "../src/scan/scanner";
 import { observeDom } from "../src/scan/observer";
 import { extractCardParams, toLotDetails } from "../src/scan/params";
 import { computeAllIn } from "../src/calc/customs";
+import { badgeText as renderBadgeText } from "../src/ui/badge";
 import { DEFAULT_CONFIG } from "../src/config.default";
 import { init } from "../src/main";
 import {
@@ -32,17 +33,14 @@ const CONFIG_RATES = {
   eurRub: DEFAULT_CONFIG.currency.referenceRates.EUR_RUB,
 };
 
-/** Space-grouped RUB amount, mirroring the badge format. */
-function groupRub(value: number): string {
-  return `${String(value).replace(/\B(?=(\d{3})+(?!\d))/g, " ")} ₽`;
-}
-
 /**
  * All-in ("под ключ") total the card fixture must headline — derived from the
- * embedded config and the config-tier rate rather than hardcoded. The card
- * params are complete, so the precision is exact and the text carries no "≈".
+ * embedded config and the config-tier rate rather than hardcoded, and rendered
+ * through the badge's own formatter so the precision marker is part of the
+ * expectation. The card publishes age, fuel and displacement but no engine
+ * power, so the recycling line dashes and the headline is a floor ("от N ₽").
  */
-const CARD_ALL_IN_TEXT = groupRub(
+const CARD_ALL_IN_TEXT = renderBadgeText(
   computeAllIn(
     {
       priceKrw: CARD_KRW,
@@ -54,7 +52,7 @@ const CARD_ALL_IN_TEXT = groupRub(
     },
     CONFIG_RATES,
     DEFAULT_CONFIG,
-  ).totalRub,
+  ),
 );
 
 // Ground truth for the desktop listing fixture, established by three
@@ -139,14 +137,15 @@ describe("desktop listing fixture", () => {
     for (const host of hosts) {
       expect(host.getAttribute("translate")).toBe("no");
       expect(host.classList.contains("notranslate")).toBe(true);
-      // Listing badges show the approximate all-in total; rows whose engine
-      // displacement is not visible show the honest marker instead of an
-      // invented number (R3).
-      expect(badgeText(host)).toMatch(/^(≈ \d{1,3}( \d{3})* ₽|по запросу)$/);
+      // Listing badges show the all-in total as a floor ("от"): the engine
+      // power the recycling fee needs is never on a listing row. Rows the
+      // calculator cannot quote at all (EVs) show the honest marker instead of
+      // an invented number (R3). Never a bare, exact-looking number.
+      expect(badgeText(host)).toMatch(/^(от \d{1,3}( \d{3})* ₽|по запросу)$/);
     }
-    // Most rows do expose a displacement in the model title, so the listing
-    // is not a wall of "по запросу".
-    expect(texts.filter((t) => t.startsWith("≈ ")).length).toBeGreaterThan(
+    // The lot price is provable on almost every row, so the listing is not a
+    // wall of "по запросу".
+    expect(texts.filter((t) => t.startsWith("от ")).length).toBeGreaterThan(
       hosts.length / 2,
     );
   });
@@ -205,9 +204,11 @@ describe("regex fallback", () => {
     await runWidget();
     const texts = badgeHosts().map(badgeText);
     expect(badgeHosts().length).toBe(2);
-    // Bare markup exposes no lot params, so no all-in total is computable:
-    // the badge says so instead of showing a number (R3).
-    expect(texts).toEqual(["по запросу", "по запросу"]);
+    // Bare markup exposes no lot params, so duty and the recycling fee dash.
+    // The lot price and the clearance fee are still provable, and a proven
+    // floor beats a refusal: 12,500,000 KRW * 0.055 = 687,500 + 4,924 fee,
+    // 6,600,000 * 0.055 = 363,000 + 2,462 fee.
+    expect(texts).toEqual(["от 692 424 ₽", "от 365 462 ₽"]);
   });
 });
 
@@ -323,6 +324,92 @@ describe("incremental scanning", () => {
     expect(scanPrices(document, [price]).map((c) => c.krw)).toEqual([
       5_000_000,
     ]);
+  });
+});
+
+/**
+ * Live regression (measured on www.encar.com, 2026-08-02).
+ *
+ * encar's own ES5 polyfill bundle REPLACES the global Array.from with an
+ * array-like-only implementation: it copies indices 0..length-1 and therefore
+ * returns [] for anything whose items only come out of Symbol.iterator.
+ * Measured in the live page context:
+ *
+ *   Array.from(new Set(["a","b"])).length   -> 0   (native: 2)
+ *   Array.from(new Map([[1,2]])).length     -> 0   (native: 1)
+ *   Array.from(document.querySelectorAll(…)) -> 29 (array-like: still fine)
+ *   [...new Set(["a","b"])].length           -> 2  (syntax: unaffected)
+ *
+ * The widget's debounce drained its pending-roots Set through Array.from, so
+ * on encar every batch reached the scan as ZERO roots: nothing inserted after
+ * activation was ever annotated, while an explicit rescan() (which scans the
+ * whole document and passes no roots at all) kept working. Page-owned globals
+ * are hostile territory — the widget uses iteration syntax, never Array.from,
+ * on anything that is not an array-like DOM collection.
+ */
+function withEncarArrayFrom(): () => void {
+  const native = Array.from;
+  const patched = (value: ArrayLike<unknown>): unknown[] => {
+    const out: unknown[] = [];
+    const length = Number(value?.length ?? 0);
+    for (let i = 0; i < length; i += 1) out.push(value[i]);
+    return out;
+  };
+  (Array as { from: unknown }).from = patched;
+  return () => {
+    (Array as { from: unknown }).from = native;
+  };
+}
+
+describe("host page that replaced Array.from (encar polyfill)", () => {
+  it("still hands the added roots to the scan", async () => {
+    const seen: Element[][] = [];
+    const observer = observeDom(
+      document.body,
+      (roots) => {
+        seen.push(roots);
+      },
+      10,
+    );
+
+    const restore = withEncarArrayFrom();
+    let hostileSetLength = -1;
+    try {
+      // Proof the emulation reproduces the live breakage before it matters.
+      hostileSetLength = Array.from(new Set(["a", "b"])).length;
+      const row = document.createElement("div");
+      row.innerHTML = '<span class="prc"><strong>900</strong>만원</span>';
+      document.body.appendChild(row);
+      await new Promise((r) => setTimeout(r, 60));
+    } finally {
+      restore();
+    }
+    observer.disconnect();
+
+    expect(hostileSetLength).toBe(0);
+    expect(seen.length).toBe(1);
+    expect(seen[0]!.length).toBe(1);
+  });
+
+  it("badges a lot inserted after activation", async () => {
+    document.body.innerHTML =
+      '<ul><li><span class="prc"><strong>900</strong>만원</span></li></ul>';
+    await runWidget();
+    expect(badgeHosts().length).toBe(1);
+
+    // Only the incremental path is exercised under the hostile global, exactly
+    // as live: the initial full scan had already succeeded.
+    const restore = withEncarArrayFrom();
+    try {
+      const li = document.createElement("li");
+      li.innerHTML = '<span class="prc"><strong>1,000</strong>만원</span>';
+      document.querySelector("ul")!.appendChild(li);
+      await new Promise((r) => setTimeout(r, 400));
+    } finally {
+      restore();
+    }
+
+    expect(badgeHosts().length).toBe(2);
   });
 });
 

@@ -5,20 +5,24 @@
  * expected value below is computed by hand in the comments from the tariff
  * table pinned in TEST_CUSTOMS — the test data is independent of
  * DEFAULT_CONFIG so an accidental default edit cannot silently bend the math.
+ * The REAL shipped tables are pinned separately in test/config-file.test.ts.
  *
  * Hand-math conventions used throughout:
  *   rates: 1 KRW = 0.05 RUB, 1 EUR = 100 RUB
  *   lotRub = priceKrw * 0.05      lotEur = lotRub / 100 = priceKrw / 2000
- *   fixed items: shipping 220 000 + SBKTS/EPTS 45 000 + broker 85 000 = 350 000
- *   commission: 5% of lotRub
+ *   cost items shipping / sbkts / broker / commission are "unknown": they
+ *   render as a dash and add NOTHING to the total, so
+ *   total = lot + duty + recycling + clearance.
  */
 import { describe, expect, it } from "vitest";
 
 import {
   AGE_BRACKET_NOTE,
+  UNKNOWN_COST_NOTE,
   computeAgeYears,
   computeAllIn,
   isNearAgeBracket,
+  isUnknownLine,
   type AllInResult,
   type LotParams,
 } from "../src/calc/customs";
@@ -29,7 +33,7 @@ import type {
 } from "../src/config.default";
 
 const TEST_CUSTOMS: CustomsConfig = {
-  asOf: "2026-08",
+  asOf: "2026-01-01",
   labels: {
     duty: "Таможенная пошлина",
     recycling: "Утилизационный сбор",
@@ -61,22 +65,43 @@ const TEST_CUSTOMS: CustomsConfig = {
       { eurPerCc: 5.7 },
     ],
   },
+  // Deliberately round synthetic amounts: the point of these tests is the
+  // lookup (displacement class -> power bracket -> age), not the ruble values.
   recyclingFee: {
-    smallMaxCc: 3000,
-    smallUnder3yRub: 3400,
-    smallFrom3yRub: 5200,
-    largeUnder3yRub: 970000,
-    largeFrom3yRub: 1235000,
+    reduced: { maxCc: 3000, maxHp: 160, under3yRub: 3400, from3yRub: 5200 },
+    classes: [
+      {
+        maxCc: 2000,
+        powerBrackets: [
+          { maxHp: 160, under3yRub: 800000, from3yRub: 1400000 },
+          { maxHp: 190, under3yRub: 900000, from3yRub: 1500000 },
+          { under3yRub: 1000000, from3yRub: 1600000 },
+        ],
+      },
+      {
+        maxCc: 3000,
+        powerBrackets: [
+          { maxHp: 160, under3yRub: 2250000, from3yRub: 3400000 },
+          { under3yRub: 2300000, from3yRub: 3500000 },
+        ],
+      },
+      {
+        powerBrackets: [
+          { maxHp: 160, under3yRub: 3290000, from3yRub: 4325000 },
+          { under3yRub: 3300000, from3yRub: 4400000 },
+        ],
+      },
+    ],
   },
   clearanceFeeBrackets: [
-    { maxRub: 200000, fee: 1067 },
-    { maxRub: 450000, fee: 2134 },
-    { maxRub: 1200000, fee: 4269 },
-    { maxRub: 2700000, fee: 11746 },
-    { maxRub: 4200000, fee: 16524 },
+    { maxRub: 200000, fee: 1231 },
+    { maxRub: 450000, fee: 2462 },
+    { maxRub: 1200000, fee: 4924 },
+    { maxRub: 2700000, fee: 13541 },
+    { maxRub: 4200000, fee: 18465 },
     { maxRub: 5500000, fee: 21344 },
-    { maxRub: 7000000, fee: 27540 },
-    { fee: 30000 },
+    { maxRub: 10000000, fee: 49240 },
+    { fee: 73860 },
   ],
 };
 
@@ -88,21 +113,16 @@ const CONFIG: WidgetConfig = {
     updatedAt: "2026-08-01",
   },
   costItems: [
-    {
-      id: "shipping",
-      label: "Доставка Корея — Владивосток",
-      kind: "fixed",
-      value: 220000,
-    },
+    { id: "shipping", label: "Доставка Корея — Владивосток", kind: "unknown" },
     {
       id: "customs",
       label: "Таможенные платежи",
       kind: "formula",
       value: "customs_v1",
     },
-    { id: "sbkts", label: "СБКТС и ЭПТС", kind: "fixed", value: 45000 },
-    { id: "broker", label: "Брокер и СВХ", kind: "fixed", value: 85000 },
-    { id: "commission", label: "Комиссия импортёра", kind: "percent", value: 5 },
+    { id: "sbkts", label: "СБКТС и ЭПТС", kind: "unknown" },
+    { id: "broker", label: "Брокер и СВХ", kind: "unknown" },
+    { id: "commission", label: "Комиссия импортёра", kind: "unknown" },
   ],
   commissionNote: "",
   customs: TEST_CUSTOMS,
@@ -110,35 +130,120 @@ const CONFIG: WidgetConfig = {
 
 const RATES = { krwRub: 0.05, eurRub: 100 };
 
+/** A fully specified lot: age, displacement AND power are all known. */
+const FULL_LOT: LotParams = {
+  priceKrw: 20_000_000,
+  ageYears: 2,
+  engineCc: 2000,
+  powerHp: 150,
+  fuel: "gasoline",
+};
+
 function compute(lot: LotParams, config: WidgetConfig = CONFIG): AllInResult {
   return computeAllIn(lot, RATES, config);
 }
 
-function itemRub(result: AllInResult, id: string): number {
+function line(result: AllInResult, id: string): AllInResult["items"][number] {
   const item = result.items.find((entry) => entry.id === id);
   if (item === undefined) throw new Error(`item ${id} missing`);
-  return item.rub;
+  return item;
+}
+
+function itemRub(result: AllInResult, id: string): number {
+  const rub = line(result, id).rub;
+  if (rub === undefined) throw new Error(`item ${id} has no amount`);
+  return rub;
+}
+
+function isDash(result: AllInResult, id: string): boolean {
+  return isUnknownLine(line(result, id));
 }
 
 describe("computeAgeYears", () => {
   const NOW = new Date(2026, 7, 1); // 2026-08-01
 
+  /** The age expressed in the unit the decree counts in: whole months. */
+  const months = (year: number, month: number, now: Date = NOW): number =>
+    computeAgeYears(year, month, now) * 12;
+
   it("counts the anniversary from the END of the registration month", () => {
     // The DOM gives year+month only. A car registered 2023-08-31 is NOT yet
     // three years old on 2026-08-01, so the anniversary month itself may not
-    // buy the cheaper 3-5y regime: 2 years until the month has fully passed.
-    expect(computeAgeYears(2023, 8, NOW)).toBe(2);
-    // One month later the whole anniversary month is behind us => 3 years.
-    expect(computeAgeYears(2023, 8, new Date(2026, 8, 1))).toBe(3);
-    // 2023-09 -> 2026-08: still short of the anniversary => 2 years.
-    expect(computeAgeYears(2023, 9, NOW)).toBe(2);
+    // buy the cheaper 3-5y regime: 35 months until the month has fully passed.
+    expect(months(2023, 8)).toBe(35);
+    // One month later the whole anniversary month is behind us => 36 months.
+    expect(months(2023, 8, new Date(2026, 8, 1))).toBe(36);
+    // 2023-09 -> 2026-08: still short of the anniversary.
+    expect(months(2023, 9)).toBe(34);
+    expect(months(2020, 7)).toBe(72);
+    expect(months(2020, 8)).toBe(71);
+    expect(months(2026, 1)).toBe(6);
+  });
+
+  it("keeps the age month-accurate instead of flooring it to whole years", () => {
+    // Flooring made every car in its SIXTH year (60-71 months) look exactly
+    // five years old and buy the cheaper "3-5 years" duty bracket. The value
+    // is years, but a real number: 71 months is 5.92 years, not 5.
+    expect(computeAgeYears(2020, 8, NOW)).toBeCloseTo(71 / 12, 10);
+    expect(computeAgeYears(2020, 8, NOW)).toBeGreaterThan(5);
+    // Whole-year boundaries stay exact, so the cliff comparisons are safe.
     expect(computeAgeYears(2020, 7, NOW)).toBe(6);
-    expect(computeAgeYears(2020, 8, NOW)).toBe(5);
-    expect(computeAgeYears(2026, 1, NOW)).toBe(0);
+    expect(computeAgeYears(2023, 8, new Date(2026, 8, 1))).toBe(3);
   });
 
   it("never returns a negative age", () => {
     expect(computeAgeYears(2027, 1, NOW)).toBe(0);
+  });
+});
+
+/**
+ * Решение 107 п.3 is "более 3, но не более 5 лет" and п.4 is "более 5". Both
+ * boundaries fall inside a year, so a floored age cannot express them: with
+ * `ageYears <= 5` every car in its sixth year was charged the cheaper 3-5
+ * rate — up to 383 008 RUB understated on a 2 L car, always in the direction
+ * that costs the importer money.
+ */
+describe("duty age cliffs are month-accurate, not floored years", () => {
+  const NOW = new Date(2026, 7, 2); // 2026-08-02
+  const PRICE = 10_000_000; // lotEur 5 000
+
+  /** Duty RUB for a 2000cc lot registered in (year, month). */
+  const dutyFor = (year: number, month: number): number =>
+    itemRub(
+      compute({
+        ...FULL_LOT,
+        priceKrw: PRICE,
+        engineCc: 2000,
+        ageYears: computeAgeYears(year, month, NOW),
+      }),
+      "duty",
+    );
+
+  // <3y value tier: max(54% * 5 000, 2.5 * 2000) EUR = 5 000 EUR = 500 000 RUB.
+  const UNDER_3Y_RUB = 500_000;
+  // п.3, 2001-2300cc: 2.7 EUR/cc = 5 400 EUR = 540 000 RUB.
+  const AGE_3_TO_5_RUB = 540_000;
+  // п.4, 2001-2300cc: 4.8 EUR/cc = 9 600 EUR = 960 000 RUB.
+  const OVER_5Y_RUB = 960_000;
+
+  it("charges the >5y rate to a car in its sixth year", () => {
+    // Registered 2021-01, valued 2026-08-02: 66 full months. Past the fifth
+    // anniversary, so п.4 applies. Flooring said "5 years" and billed п.3.
+    expect(dutyFor(2021, 1)).toBe(OVER_5Y_RUB);
+  });
+
+  it("puts the >5y cliff at 60 months, to the month", () => {
+    // 2021-07 -> exactly 60 months: "не более 5 лет" is still п.3.
+    expect(dutyFor(2021, 7)).toBe(AGE_3_TO_5_RUB);
+    // 2021-06 -> 61 months: past five years, п.4.
+    expect(dutyFor(2021, 6)).toBe(OVER_5Y_RUB);
+  });
+
+  it("puts the 3y cliff at 36 months, to the month", () => {
+    // 2023-08 -> 35 months: still the <3y percent-of-value regime.
+    expect(dutyFor(2023, 8)).toBe(UNDER_3Y_RUB);
+    // 2023-07 -> 36 months: the flat 3-5y bracket.
+    expect(dutyFor(2023, 7)).toBe(AGE_3_TO_5_RUB);
   });
 });
 
@@ -165,27 +270,19 @@ describe("age near a duty bracket boundary", () => {
     // bracket we cannot prove, so it must NOT be the one quoted.
     const ageYears = computeAgeYears(2023, 8, NOW);
     const result = compute({
-      priceKrw: 20_000_000,
+      ...FULL_LOT,
       ageYears,
-      engineCc: 2000,
-      fuel: "gasoline",
       ageNearBracket: isNearAgeBracket(2023, 8, NOW),
     });
     expect(itemRub(result, "duty")).toBe(700_000);
   });
 
   it("degrades an exact lot to approx with a Russian note near a boundary", () => {
-    const lot: LotParams = {
-      priceKrw: 20_000_000,
-      ageYears: 2,
-      engineCc: 2000,
-      fuel: "gasoline",
-    };
-    const plain = compute(lot);
+    const plain = compute(FULL_LOT);
     expect(plain.precision).toBe("exact");
-    expect(plain.notes).toEqual([]);
+    expect(plain.notes).not.toContain(AGE_BRACKET_NOTE);
 
-    const near = compute({ ...lot, ageNearBracket: true });
+    const near = compute({ ...FULL_LOT, ageNearBracket: true });
     expect(near.precision).toBe("approx");
     expect(near.notes).toContain(AGE_BRACKET_NOTE);
     // Same money, only the confidence changes.
@@ -229,12 +326,10 @@ describe("duty: age <3y value tiers (percent with EUR/cc minimum)", () => {
   for (const c of cases) {
     it(c.name, () => {
       const result = compute({
+        ...FULL_LOT,
         priceKrw: c.lotEur * 2000,
-        ageYears: 2,
         engineCc: c.cc,
-        fuel: "gasoline",
       });
-      expect(result.precision).toBe("exact");
       expect(itemRub(result, "duty")).toBe(c.dutyRub);
     });
   }
@@ -266,10 +361,10 @@ describe("duty: per-cc brackets by age", () => {
   for (const c of cases) {
     it(`age ${c.age}y, ${c.cc}cc -> ${c.dutyRub} RUB`, () => {
       const result = compute({
+        ...FULL_LOT,
         priceKrw: PRICE,
         ageYears: c.age,
         engineCc: c.cc,
-        fuel: "gasoline",
       });
       expect(itemRub(result, "duty")).toBe(c.dutyRub);
     });
@@ -279,55 +374,86 @@ describe("duty: per-cc brackets by age", () => {
     // 2000cc age 3 -> 2.7 EUR/cc => 5400 EUR = 540,000 RUB. The <3y value
     // tier for lotEur 5000 would give max(54%*5000=2700, 2.5*2000=5000) EUR
     // = 500,000 RUB — a different number, so the bracket choice is provable.
-    const result = compute({
-      priceKrw: PRICE,
-      ageYears: 3,
-      engineCc: 2000,
-      fuel: "gasoline",
-    });
+    const result = compute({ ...FULL_LOT, priceKrw: PRICE, ageYears: 3 });
     expect(itemRub(result, "duty")).toBe(540000);
   });
 });
 
-describe("recycling fee (personal use)", () => {
+describe("recycling fee: displacement class x power bracket x age", () => {
   const PRICE = 10_000_000;
-  const at = (age: number, cc: number): number =>
+  const at = (age: number, cc: number, hp: number): number =>
     itemRub(
-      compute({ priceKrw: PRICE, ageYears: age, engineCc: cc, fuel: "gasoline" }),
+      compute({ ...FULL_LOT, priceKrw: PRICE, ageYears: age, engineCc: cc, powerHp: hp }),
       "recycling",
     );
 
-  it("<=3000cc: 3400 under 3y, 5200 from 3y", () => {
-    expect(at(2, 3000)).toBe(3400);
-    expect(at(3, 3000)).toBe(5200);
-    expect(at(6, 1500)).toBe(5200);
+  it("reduced personal-use rate under both caps (<=3000cc, <=160hp)", () => {
+    expect(at(2, 2000, 150)).toBe(3400);
+    expect(at(6, 2000, 150)).toBe(5200);
+    expect(at(6, 3000, 160)).toBe(5200); // both caps are inclusive
+    expect(at(6, 2500, 150)).toBe(5200);
   });
 
-  it(">3000cc: config placeholder values", () => {
-    expect(at(2, 3001)).toBe(970000);
-    expect(at(6, 3001)).toBe(1235000);
+  it("above 160 hp the reduced rate is gone (PP 1713, in force 01.12.2025)", () => {
+    // 2000cc: <=160hp 800000/1400000, <=190hp 900000/1500000, else 1000000/1600000
+    expect(at(6, 2000, 161)).toBe(1500000);
+    expect(at(2, 2000, 161)).toBe(900000);
+    expect(at(6, 2000, 200)).toBe(1600000);
+    expect(at(2, 2000, 200)).toBe(1000000);
+  });
+
+  it("above 3000cc there is no reduced rate at any power", () => {
+    // 3500cc / 150hp: the >3000cc class, lowest power bracket.
+    expect(at(6, 3500, 150)).toBe(4325000);
+    expect(at(2, 3500, 150)).toBe(3290000);
+  });
+
+  it("picks the displacement class by full displacement", () => {
+    // 2001cc leaves the <=2000 class even though the power bracket is the same.
+    expect(at(6, 2001, 200)).toBe(3500000);
+    expect(at(6, 2000, 200)).toBe(1600000);
+  });
+
+  it("renders a dash when the engine power is unknown", () => {
+    // Power is not on the encar listing: the 2025 reform made the fee depend
+    // on it, so quoting anything here would be a guess between 5 200 RUB and
+    // seven figures.
+    const result = compute({ ...FULL_LOT, powerHp: undefined });
+    expect(isDash(result, "recycling")).toBe(true);
+    expect(isDash(result, "duty")).toBe(false);
+    expect(isDash(result, "clearance")).toBe(false);
+    expect(result.precision).toBe("partial");
+  });
+
+  it("renders a dash for a hybrid even when a power figure is known", () => {
+    // For a parallel hybrid the decree adds the electric motor's 30-minute
+    // power to the ICE power; the listing gives at most one of the two.
+    const result = compute({ ...FULL_LOT, fuel: "hybrid" });
+    expect(isDash(result, "recycling")).toBe(true);
+    expect(isDash(result, "duty")).toBe(false);
+    expect(result.precision).toBe("partial");
   });
 });
 
 describe("customs clearance fee brackets (by lot RUB value)", () => {
   // priceKrw = lotRub * 20 at 0.05 RUB/KRW (exact, no rounding involved).
   const cases: Array<{ lotRub: number; fee: number }> = [
-    { lotRub: 200000, fee: 1067 },
-    { lotRub: 200001, fee: 2134 },
-    { lotRub: 450000, fee: 2134 },
-    { lotRub: 1200000, fee: 4269 },
-    { lotRub: 1200001, fee: 11746 },
-    { lotRub: 7000000, fee: 27540 },
-    { lotRub: 7000001, fee: 30000 },
+    { lotRub: 200000, fee: 1231 },
+    { lotRub: 200001, fee: 2462 },
+    { lotRub: 450000, fee: 2462 },
+    { lotRub: 1200000, fee: 4924 },
+    { lotRub: 1200001, fee: 13541 },
+    { lotRub: 10000000, fee: 49240 },
+    { lotRub: 10000001, fee: 73860 },
   ];
 
   for (const c of cases) {
     it(`lot ${c.lotRub} RUB -> fee ${c.fee}`, () => {
       const result = compute({
+        ...FULL_LOT,
         priceKrw: c.lotRub * 20,
         ageYears: 4,
         engineCc: 1000,
-        fuel: "gasoline",
       });
       expect(itemRub(result, "clearance")).toBe(c.fee);
     });
@@ -335,21 +461,15 @@ describe("customs clearance fee brackets (by lot RUB value)", () => {
 });
 
 describe("all-in total", () => {
-  it("sums lot, fixed items, customs items and commission", () => {
-    // 20,000,000 KRW, age 2, 2000cc:
+  it("sums lot and customs only; unknown items are dashes", () => {
+    // 20,000,000 KRW, age 2, 2000cc, 150 hp:
     //   lot        = 20,000,000 * 0.05          = 1,000,000
     //   duty       = max(48%*10,000, 3.5*2000) EUR = 7,000 EUR = 700,000
-    //   recycling  = 3,400 (<3y, <=3000cc)
-    //   clearance  = 4,269 (lot 1,000,000 <= 1,200,000)
-    //   fixed      = 220,000 + 45,000 + 85,000  = 350,000
-    //   commission = 5% * 1,000,000             = 50,000
-    //   total      = 2,107,669
-    const result = compute({
-      priceKrw: 20_000_000,
-      ageYears: 2,
-      engineCc: 2000,
-      fuel: "gasoline",
-    });
+    //   recycling  = 3,400 (reduced: <3y, <=3000cc, <=160hp)
+    //   clearance  = 4,924 (lot 1,000,000 <= 1,200,000)
+    //   shipping / sbkts / broker / commission: unknown -> dash, add nothing
+    //   total      = 1,708,324
+    const result = compute(FULL_LOT);
     expect(result.precision).toBe("exact");
     expect(result.items.map((item) => item.id)).toEqual([
       "lot",
@@ -362,58 +482,70 @@ describe("all-in total", () => {
       "commission",
     ]);
     expect(itemRub(result, "lot")).toBe(1_000_000);
-    expect(result.totalRub).toBe(2_107_669);
+    expect(result.totalRub).toBe(1_708_324);
   });
 
-  it("hybrid with a known displacement computes like a combustion car", () => {
+  it("marks the unknown cost items as dashes without degrading precision", () => {
+    const result = compute(FULL_LOT);
+    for (const id of ["shipping", "sbkts", "broker", "commission"]) {
+      expect(isDash(result, id)).toBe(true);
+    }
+    expect(isDash(result, "lot")).toBe(false);
+    expect(result.precision).toBe("exact");
+    expect(result.notes).toContain(UNKNOWN_COST_NOTE);
+  });
+
+  it("adds nothing for an unknown item however many there are", () => {
+    const extra: WidgetConfig = {
+      ...CONFIG,
+      costItems: [
+        ...CONFIG.costItems,
+        { id: "storage", label: "Хранение", kind: "unknown" },
+        { id: "delivery_rf", label: "Доставка по РФ", kind: "unknown" },
+      ],
+    };
+    expect(compute(FULL_LOT, extra).totalRub).toBe(compute(FULL_LOT).totalRub);
+    expect(compute(FULL_LOT, extra).precision).toBe("exact");
+  });
+
+  it("still computes percent and fixed items when a config uses them", () => {
+    const withMoney: WidgetConfig = {
+      ...CONFIG,
+      costItems: [
+        ...CONFIG.costItems,
+        { id: "extra", label: "Доп. услуга", kind: "fixed", value: 10000 },
+        { id: "fee", label: "Комиссия", kind: "percent", value: 5 },
+      ],
+    };
+    const result = compute(FULL_LOT, withMoney);
+    expect(itemRub(result, "extra")).toBe(10_000);
+    expect(itemRub(result, "fee")).toBe(50_000); // 5% of 1,000,000
+    expect(result.precision).toBe("exact");
+    expect(result.totalRub).toBe(1_708_324 + 10_000 + 50_000);
+  });
+
+  it("hybrid with a known displacement computes duty like a combustion car", () => {
     // 1600cc age 4 -> y3 bracket 2.5 EUR/cc = 4000 EUR = 400,000 RUB.
     const result = compute({
+      ...FULL_LOT,
       priceKrw: 10_000_000,
       ageYears: 4,
       engineCc: 1600,
       fuel: "hybrid",
     });
-    expect(result.precision).toBe("exact");
     expect(itemRub(result, "duty")).toBe(400000);
-  });
-
-  it("commission change in config changes the total by the expected delta", () => {
-    const tenPct: WidgetConfig = {
-      ...CONFIG,
-      costItems: CONFIG.costItems.map((item) =>
-        item.kind === "percent" && item.id === "commission"
-          ? { ...item, value: 10 }
-          : item,
-      ),
-    };
-    const lot: LotParams = {
-      priceKrw: 20_000_000,
-      ageYears: 2,
-      engineCc: 2000,
-      fuel: "gasoline",
-    };
-    const base = compute(lot);
-    const raised = compute(lot, tenPct);
-    // lotRub 1,000,000: 5% -> 50,000, 10% -> 100,000.
-    expect(raised.totalRub - base.totalRub).toBe(50_000);
   });
 });
 
 describe("cost items the calculator cannot handle", () => {
-  const LOT: LotParams = {
-    priceKrw: 20_000_000,
-    ageYears: 2,
-    engineCc: 2000,
-    fuel: "gasoline",
-  };
-
   function withItems(items: CostItem[]): WidgetConfig {
     return { ...CONFIG, costItems: items };
   }
 
   it("does not silently drop a fixed item whose value is a quoted number", () => {
     // A hand-edited config with "220000" instead of 220000: the shipping line
-    // used to vanish and the total was 220,000 RUB too low, silently.
+    // used to vanish and the total was 220,000 RUB too low, silently. A
+    // malformed item is NOT the same thing as a deliberate "unknown" one.
     const quoted = withItems([
       {
         id: "shipping",
@@ -422,7 +554,7 @@ describe("cost items the calculator cannot handle", () => {
         value: "220000",
       } as unknown as CostItem,
     ]);
-    const result = compute(LOT, quoted);
+    const result = compute(FULL_LOT, quoted);
     expect(result.items.some((item) => item.id === "shipping")).toBe(false);
     expect(result.precision).toBe("onRequest");
   });
@@ -431,7 +563,7 @@ describe("cost items the calculator cannot handle", () => {
     const unknown = withItems([
       { id: "customs", label: "Таможенные платежи", kind: "formula", value: "customs_v2" },
     ]);
-    const result = compute(LOT, unknown);
+    const result = compute(FULL_LOT, unknown);
     expect(result.items.some((item) => item.id === "duty")).toBe(false);
     expect(result.precision).toBe("onRequest");
   });
@@ -441,7 +573,7 @@ describe("cost items the calculator cannot handle", () => {
       { id: "customs", label: "Таможенные платежи", kind: "formula", value: "customs_v1" },
       { id: "customs2", label: "Таможенные платежи 2", kind: "formula", value: "customs_v1" },
     ]);
-    const result = compute(LOT, doubled);
+    const result = compute(FULL_LOT, doubled);
     const ids = result.items.map((item) => item.id);
     expect(ids.filter((id) => id === "duty").length).toBe(1);
     expect(ids.filter((id) => id === "recycling").length).toBe(1);
@@ -450,52 +582,184 @@ describe("cost items the calculator cannot handle", () => {
   });
 });
 
+describe("partial quotes (an uncomputable customs line is a dash, not a wall)", () => {
+  it("quotes a partial total when the displacement is unknown", () => {
+    // 34 of 41 listing rows have no displacement. The lot price and the
+    // clearance fee are still provable, so the quote is a floor, not a
+    // "по запросу": 1,000,000 + 4,924.
+    const result = compute({
+      priceKrw: 20_000_000,
+      ageYears: 2,
+      fuel: "gasoline",
+    });
+    expect(result.precision).toBe("partial");
+    expect(isDash(result, "duty")).toBe(true);
+    expect(isDash(result, "recycling")).toBe(true);
+    expect(isDash(result, "clearance")).toBe(false);
+    expect(result.totalRub).toBe(1_004_924);
+  });
+
+  it("quotes a partial total when the age is unknown", () => {
+    const result = compute({
+      priceKrw: 20_000_000,
+      engineCc: 2000,
+      powerHp: 150,
+      fuel: "gasoline",
+    });
+    expect(result.precision).toBe("partial");
+    expect(isDash(result, "duty")).toBe(true);
+    expect(isDash(result, "recycling")).toBe(true);
+    expect(result.totalRub).toBe(1_004_924);
+  });
+
+  it("keeps every dash out of the total and gives it no amount at all", () => {
+    const result = compute({ priceKrw: 20_000_000, fuel: "gasoline" });
+    const dashed = result.items.filter(isUnknownLine);
+    expect(dashed.length).toBeGreaterThan(0);
+    // A dash carries no figure: a zero would sum in silently and read as
+    // "free" on screen.
+    for (const item of dashed) expect(item.rub).toBeUndefined();
+    let summed = 0;
+    for (const item of result.items) {
+      if (!isUnknownLine(item)) summed += item.rub;
+    }
+    expect(result.totalRub).toBe(summed);
+  });
+
+  it("estimated params stay partial, not approx, when customs are incomplete", () => {
+    const result = compute({
+      priceKrw: 20_000_000,
+      ageYears: 2,
+      estimated: true,
+      fuel: "gasoline",
+    });
+    expect(result.precision).toBe("partial");
+  });
+
+  it("approx survives when every customs line is computable", () => {
+    const result = compute({ ...FULL_LOT, estimated: true });
+    expect(result.precision).toBe("approx");
+  });
+});
+
+/**
+ * The line between a partial quote and a refusal (R3).
+ *
+ * MISSING data (no displacement on the row, no power anywhere) is a legitimate
+ * partial: that line dashes and the total is a provable floor. A param that is
+ * PRESENT BUT INVALID — NaN, Infinity, zero, negative — is not data at all: it
+ * is a half-parsed row, and quoting "от N ₽" off it puts a spendable number
+ * under a lot whose inputs are nonsense.
+ */
+describe("present-but-invalid params refuse; missing ones are a floor", () => {
+  const invalid: Array<{ name: string; lot: LotParams }> = [
+    { name: "NaN age", lot: { ...FULL_LOT, ageYears: Number.NaN } },
+    {
+      name: "Infinity age",
+      lot: { ...FULL_LOT, ageYears: Number.POSITIVE_INFINITY },
+    },
+    { name: "negative age", lot: { ...FULL_LOT, ageYears: -3 } },
+    { name: "NaN displacement", lot: { ...FULL_LOT, engineCc: Number.NaN } },
+    { name: "zero displacement", lot: { ...FULL_LOT, engineCc: 0 } },
+    { name: "negative displacement", lot: { ...FULL_LOT, engineCc: -2000 } },
+    { name: "NaN power", lot: { ...FULL_LOT, powerHp: Number.NaN } },
+    { name: "zero power", lot: { ...FULL_LOT, powerHp: 0 } },
+    { name: "negative power", lot: { ...FULL_LOT, powerHp: -150 } },
+  ];
+
+  for (const { name, lot } of invalid) {
+    it(`${name} is refused, never quoted as a floor`, () => {
+      const result = compute(lot);
+      expect(result.precision).toBe("onRequest");
+      expect(Number.isFinite(result.totalRub)).toBe(true);
+    });
+  }
+
+  it("quotes a floor for params that are simply absent", () => {
+    expect(compute({ ...FULL_LOT, ageYears: undefined }).precision).toBe(
+      "partial",
+    );
+    expect(compute({ ...FULL_LOT, engineCc: undefined }).precision).toBe(
+      "partial",
+    );
+    expect(compute({ ...FULL_LOT, powerHp: undefined }).precision).toBe(
+      "partial",
+    );
+  });
+
+  it("refuses an unusable price even when no customs item can catch it", () => {
+    // Without a formula item nothing in the config depends on the lot price,
+    // so a NaN/zero/negative price sailed through as an "exact" total of the
+    // fixed lines. There is no lower bound without a price.
+    const noCustoms: WidgetConfig = {
+      ...CONFIG,
+      costItems: [
+        { id: "shipping", label: "Доставка", kind: "fixed", value: 220_000 },
+      ],
+    };
+    for (const priceKrw of [
+      0,
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ]) {
+      const result = compute({ ...FULL_LOT, priceKrw }, noCustoms);
+      expect(result.precision).toBe("onRequest");
+    }
+    for (const rates of [
+      { krwRub: Number.NaN, eurRub: 100 },
+      { krwRub: 0.05, eurRub: 0 },
+    ]) {
+      expect(computeAllIn(FULL_LOT, rates, noCustoms).precision).toBe(
+        "onRequest",
+      );
+    }
+  });
+});
+
 describe("degradation to 'on request'", () => {
-  it("EV lists only known items and marks the total on request", () => {
+  it("EV stays on request: different rules entirely", () => {
     const result = compute({
       priceKrw: 20_000_000,
       ageYears: 2,
       fuel: "electric",
-    });
-    expect(result.precision).toBe("onRequest");
-    expect(result.items.map((item) => item.id)).toEqual([
-      "lot",
-      "shipping",
-      "sbkts",
-      "broker",
-      "commission",
-    ]);
-    // Known items only: 1,000,000 + 350,000 + 50,000.
-    expect(result.totalRub).toBe(1_400_000);
-  });
-
-  it("EV stays on request even when a displacement is present", () => {
-    const result = compute({
-      priceKrw: 20_000_000,
-      ageYears: 2,
-      engineCc: 100,
-      fuel: "electric",
-    });
-    expect(result.precision).toBe("onRequest");
-  });
-
-  it("hybrid without displacement is on request", () => {
-    const result = compute({
-      priceKrw: 20_000_000,
-      ageYears: 2,
-      fuel: "hybrid",
     });
     expect(result.precision).toBe("onRequest");
     expect(result.items.some((item) => item.id === "duty")).toBe(false);
   });
 
-  it("unknown age or displacement is on request", () => {
-    expect(
-      compute({ priceKrw: 20_000_000, engineCc: 2000, fuel: "gasoline" })
-        .precision,
-    ).toBe("onRequest");
-    expect(
-      compute({ priceKrw: 20_000_000, ageYears: 2, fuel: "gasoline" }).precision,
-    ).toBe("onRequest");
+  it("EV stays on request even when displacement and power are present", () => {
+    const result = compute({
+      priceKrw: 20_000_000,
+      ageYears: 2,
+      engineCc: 100,
+      powerHp: 150,
+      fuel: "electric",
+    });
+    expect(result.precision).toBe("onRequest");
+  });
+
+  it("an unusable lot price is on request, not a partial total", () => {
+    for (const priceKrw of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const result = compute({ ...FULL_LOT, priceKrw });
+      expect(result.precision).toBe("onRequest");
+      expect(result.items.some((item) => item.id === "lot")).toBe(false);
+    }
+  });
+
+  it("an unusable FX rate is on request", () => {
+    const result = computeAllIn(FULL_LOT, { krwRub: 0, eurRub: 100 }, CONFIG);
+    expect(result.precision).toBe("onRequest");
+  });
+
+  it("never returns a non-finite total", () => {
+    for (const lot of [
+      FULL_LOT,
+      { ...FULL_LOT, engineCc: undefined },
+      { ...FULL_LOT, priceKrw: Number.NaN },
+      { priceKrw: 20_000_000, fuel: "electric" as const },
+    ]) {
+      expect(Number.isFinite(compute(lot).totalRub)).toBe(true);
+    }
   });
 });

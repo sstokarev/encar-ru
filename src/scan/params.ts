@@ -169,7 +169,7 @@ function boundStateText(
   lotId: string | null,
 ): { text: string | null; discarded: boolean } {
   const texts: string[] = [];
-  for (const script of Array.from(doc.querySelectorAll("script"))) {
+  for (const script of [...doc.querySelectorAll("script")]) {
     const text = script.textContent ?? "";
     if (text.includes("__PRELOADED_STATE__")) texts.push(text);
   }
@@ -205,13 +205,13 @@ function lotTitleText(doc: Document): string {
 
   const price = doc.querySelector(PRICE_ELEMENT_SELECTOR);
   if (price !== null) {
-    const headings = Array.from(doc.querySelectorAll("h1, h2, h3")).filter(
+    const headings = [...doc.querySelectorAll("h1, h2, h3")].filter(
       // Node.DOCUMENT_POSITION_FOLLOWING: the price comes after the heading.
       (heading) => (heading.compareDocumentPosition(price) & 4) !== 0,
     );
     const title = headings[headings.length - 1];
     if (title !== undefined) {
-      const parts = Array.from(title.childNodes).map(
+      const parts = [...title.childNodes].map(
         (child) => child.textContent ?? "",
       );
       return parts.join(" ");
@@ -272,7 +272,7 @@ export function extractCardParams(
   }
 
   // 2. Visible spec list (dt/dd) for anything the state did not provide.
-  for (const dt of Array.from(doc.querySelectorAll("dt"))) {
+  for (const dt of [...doc.querySelectorAll("dt")]) {
     const label = (dt.textContent ?? "").trim();
     const dd = dt.nextElementSibling;
     if (!dd || dd.tagName !== "DD") continue;
@@ -364,6 +364,21 @@ export function extractListingParams(priceEl: Element): DomLotParams {
   // The whole row text is NOT a cc source: it also carries mileage, price
   // and dealer notes, and a "1.6" picked out of those would silently drive
   // the badge total. No title element -> no displacement (R3 degradation).
+  //
+  // There is nothing else to fall back on. Audited live on the imported-car
+  // listing (www.encar.com, 2026-08-02): a row exposes .cls (maker + model),
+  // .dtl (trim badge), .detail (.yer/.km/.fue/.lo/.ins), .prc and nothing
+  // more; its only data-* payload is data-impression="carid|price|modelGroup
+  // |slot…"; the row link carries the car id plus tracking parameters; and
+  // the search record the list is rendered from (Id, Manufacturer, Model,
+  // Badge, Transmission, FuelType, Year, FormYear, Mileage, Price, SellType,
+  // BuyType, ModifiedDate, Office*, Dealer*, Trust, Condition, Photo*) has no
+  // displacement field at all. So roughly 4 of 5 imported rows legitimately
+  // end up without a cc: their .dtl is a marketing designation ("520d M 스포츠",
+  // "E350 4MATIC AMG Line", "xDrive 30d"), which must NOT be read as a
+  // displacement — those names do not reliably encode one, and a wrong cc
+  // silently moves the lot into another duty bracket. Undefined is the honest
+  // answer; the calculator degrades the customs line instead.
   const titleEl = row.querySelector(".dtl") ?? row.querySelector(".cls");
   const title = titleEl === null ? "" : originalText(titleEl);
   const cc = estimateCcFromText(title);

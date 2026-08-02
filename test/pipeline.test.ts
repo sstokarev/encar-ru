@@ -18,7 +18,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { init } from "../src/main";
 import { badgeText as renderBadgeText } from "../src/ui/badge";
-import { computeAllIn, type LotParams } from "../src/calc/customs";
+import {
+  computeAllIn,
+  isUnknownLine,
+  type LotParams,
+} from "../src/calc/customs";
 import { DEFAULT_CONFIG } from "../src/config.default";
 import { extractListingParams } from "../src/scan/params";
 import { applyDictionary } from "../src/translate/apply";
@@ -62,6 +66,19 @@ function badgeTexts(): string[] {
   return badgeHosts().map(badgeText);
 }
 
+/**
+ * Every shape a badge is allowed to have: a bare total (exact), "≈" (computed
+ * from estimated params), "от" (a floor — some customs line is not
+ * determinable) or the honest refusal. Listing rows land on "от" today: the
+ * recycling fee needs an engine power figure encar does not publish.
+ */
+const BADGE_TEXT_RE = /^((≈ |от )?\d{1,3}( \d{3})* ₽|по запросу)$/;
+
+/** True for a badge that shows an amount rather than the refusal marker. */
+function isPriced(text: string): boolean {
+  return text.endsWith(" ₽");
+}
+
 beforeEach(() => {
   // No network: embedded config + config-tier rates (KRW_RUB 0.055, EUR_RUB 90).
   vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
@@ -87,11 +104,11 @@ describe("full pipeline: scan -> dictionary -> rescan (listing)", () => {
     // (a) no badge may ever contain "NaN" / "Infinity".
     for (const text of before) {
       expect(text).not.toMatch(/NaN|Infinity/);
-      expect(text).toMatch(/^(≈ \d{1,3}( \d{3})* ₽|по запросу)$/);
+      expect(text).toMatch(BADGE_TEXT_RE);
     }
 
     // (c) a healthy majority of rows must show a real price, not the marker.
-    const numeric = before.filter((t) => t.startsWith("≈ "));
+    const numeric = before.filter(isPriced);
     expect(numeric.length).toBeGreaterThan(before.length / 2);
 
     // The dictionary has rewritten the rows by now: rescan the translated DOM
@@ -119,9 +136,7 @@ describe("full pipeline: scan -> dictionary -> rescan (listing)", () => {
 
     // Pick a row that currently shows a real price and whose price cell the
     // site can re-render on its own (photo ads re-bind span.val on paging).
-    const priced = badgeHosts().find((host) =>
-      badgeText(host).startsWith("≈ "),
-    );
+    const priced = badgeHosts().find((host) => isPriced(badgeText(host)));
     expect(priced).toBeDefined();
     const priceEl = priced!.closest("[data-encar-ru]");
     expect(priceEl).not.toBeNull();
@@ -175,10 +190,12 @@ describe("detail page: card params belong to the main lot only", () => {
     expect(main).not.toBeNull();
     expect(similar).not.toBeNull();
 
-    // The main lot has full params: an exact total, no "≈".
-    expect(badgeText(main!)).toMatch(/^\d{1,3}( \d{3})* ₽$/);
-    // The similar lot is a different car: its own row params, hence approximate.
-    expect(badgeText(similar!)).toMatch(/^≈ \d{1,3}( \d{3})* ₽$/);
+    // Both are floors ("от"): the engine power the recycling fee needs is on
+    // neither the card nor the row. What matters here is that they are
+    // computed from DIFFERENT params — 2199cc/2016-09 for the lot of the page,
+    // 1999cc/2018-07 for the similar lot — and so cannot coincide.
+    expect(badgeText(main!)).toMatch(/^от \d{1,3}( \d{3})* ₽$/);
+    expect(badgeText(similar!)).toMatch(/^от \d{1,3}( \d{3})* ₽$/);
     expect(badgeText(similar!)).not.toBe(badgeText(main!));
 
     // Only the lot of the page expands into a cost breakdown.
@@ -242,6 +259,12 @@ describe("listing params survive our own translation", () => {
 });
 
 describe("computeAllIn refuses to produce a non-finite total", () => {
+  /**
+   * Every one of these lots carries a param that is PRESENT but cannot be a
+   * value. That is a broken reading, not missing data: the quote must refuse
+   * outright. Degrading it to "partial" would headline "от N ₽" — a spendable
+   * number — under a lot whose inputs are nonsense.
+   */
   const bad: Array<{ name: string; lot: LotParams }> = [
     { name: "NaN age", lot: { priceKrw: 20_000_000, ageYears: NaN, engineCc: 2000 } },
     { name: "NaN cc", lot: { priceKrw: 20_000_000, ageYears: 4, engineCc: NaN } },
@@ -249,10 +272,6 @@ describe("computeAllIn refuses to produce a non-finite total", () => {
     {
       name: "Infinity price",
       lot: { priceKrw: Infinity, ageYears: 4, engineCc: 2000 },
-    },
-    {
-      name: "undefined age and cc",
-      lot: { priceKrw: 20_000_000 } as LotParams,
     },
     {
       name: "negative age",
@@ -268,6 +287,7 @@ describe("computeAllIn refuses to produce a non-finite total", () => {
       name: "negative price",
       lot: { priceKrw: -20_000_000, ageYears: 4, engineCc: 2000 },
     },
+    { name: "zero power", lot: { priceKrw: 20_000_000, ageYears: 4, engineCc: 2000, powerHp: 0 } },
   ];
 
   for (const { name, lot } of bad) {
@@ -276,10 +296,29 @@ describe("computeAllIn refuses to produce a non-finite total", () => {
       expect(result.precision).toBe("onRequest");
       expect(Number.isFinite(result.totalRub)).toBe(true);
       for (const item of result.items) {
-        expect(Number.isFinite(item.rub)).toBe(true);
+        // A dashed line carries NO amount at all (that is the whole point of
+        // the kind); every line that does carry one must be finite.
+        expect(isUnknownLine(item) || Number.isFinite(item.rub)).toBe(true);
       }
     });
   }
+
+  it("absent params are a floor, not a refusal", () => {
+    // Nothing here is broken: the row simply does not publish an age or a
+    // displacement. The lot price and the clearance fee are still provable, so
+    // the honest answer is "от N ₽", not "по запросу".
+    const result = computeAllIn(
+      { priceKrw: 20_000_000 } as LotParams,
+      RATES,
+      DEFAULT_CONFIG,
+    );
+    expect(result.precision).toBe("partial");
+    expect(Number.isFinite(result.totalRub)).toBe(true);
+    expect(result.totalRub).toBeGreaterThan(0);
+    for (const item of result.items) {
+      expect(isUnknownLine(item) || Number.isFinite(item.rub)).toBe(true);
+    }
+  });
 
   it("non-finite FX rates degrade instead of poisoning every item", () => {
     const lot: LotParams = {

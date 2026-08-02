@@ -15,8 +15,7 @@
     {
       "id": "shipping",
       "label": "Доставка Корея — Владивосток",
-      "kind": "fixed",
-      "value": 220000
+      "kind": "unknown"
     },
     {
       "id": "customs",
@@ -27,24 +26,21 @@
     {
       "id": "sbkts",
       "label": "СБКТС и ЭПТС",
-      "kind": "fixed",
-      "value": 45000
+      "kind": "unknown"
     },
     {
       "id": "broker",
       "label": "Брокер и СВХ",
-      "kind": "fixed",
-      "value": 85000
+      "kind": "unknown"
     },
     {
       "id": "commission",
       "label": "Комиссия импортёра",
-      "kind": "percent",
-      "value": 5
+      "kind": "unknown"
     }
   ],
   "customs": {
-    "asOf": "2026-08",
+    "asOf": "2026-01-01",
     "labels": {
       "duty": "Таможенная пошлина",
       "recycling": "Утилизационный сбор",
@@ -77,22 +73,106 @@
       ]
     },
     "recyclingFee": {
-      "smallMaxCc": 3000,
-      "smallUnder3yRub": 3400,
-      "smallFrom3yRub": 5200,
-      "largeUnder3yRub": 970000,
-      "largeFrom3yRub": 1235000,
-      "comment": "Ставки для объёма >3000 см³ — ориентировочные, отредактируйте по актуальным данным брокера."
+      "reduced": {
+        "maxCc": 3000,
+        "maxHp": 160,
+        "under3yRub": 3400,
+        "from3yRub": 5200
+      },
+      "classes": [
+        {
+          "maxCc": 1000,
+          "powerBrackets": [
+            { "maxHp": 160, "under3yRub": 297600, "from3yRub": 552000 },
+            { "maxHp": 190, "under3yRub": 307200, "from3yRub": 568600 },
+            { "maxHp": 220, "under3yRub": 316800, "from3yRub": 585600 },
+            { "maxHp": 250, "under3yRub": 324000, "from3yRub": 602400 },
+            { "under3yRub": 345600, "from3yRub": 602400 }
+          ]
+        },
+        {
+          "maxCc": 2000,
+          "powerBrackets": [
+            { "maxHp": 160, "under3yRub": 800800, "from3yRub": 1408800 },
+            { "maxHp": 190, "under3yRub": 900000, "from3yRub": 1492800 },
+            { "maxHp": 220, "under3yRub": 952800, "from3yRub": 1584000 },
+            { "maxHp": 250, "under3yRub": 1010400, "from3yRub": 1677600 },
+            { "maxHp": 280, "under3yRub": 1142400, "from3yRub": 1838400 },
+            { "maxHp": 310, "under3yRub": 1291200, "from3yRub": 2011200 },
+            { "maxHp": 340, "under3yRub": 1459200, "from3yRub": 2203200 },
+            { "maxHp": 370, "under3yRub": 1663200, "from3yRub": 2412000 },
+            { "maxHp": 400, "under3yRub": 1896000, "from3yRub": 2640000 },
+            { "maxHp": 430, "under3yRub": 2160000, "from3yRub": 2892000 },
+            { "maxHp": 460, "under3yRub": 2464800, "from3yRub": 3168000 },
+            { "maxHp": 500, "under3yRub": 2808000, "from3yRub": 3468000 },
+            { "under3yRub": 3201600, "from3yRub": 3796800 }
+          ]
+        },
+        {
+          "maxCc": 3000,
+          "powerBrackets": [
+            { "maxHp": 160, "under3yRub": 2250400, "from3yRub": 3407200 },
+            { "maxHp": 190, "under3yRub": 2306600, "from3yRub": 3456000 },
+            { "maxHp": 220, "under3yRub": 2364000, "from3yRub": 3501600 },
+            { "maxHp": 250, "under3yRub": 2402400, "from3yRub": 3552000 },
+            { "maxHp": 280, "under3yRub": 2520000, "from3yRub": 3660000 },
+            { "maxHp": 310, "under3yRub": 2620800, "from3yRub": 3770400 },
+            { "maxHp": 340, "under3yRub": 2726400, "from3yRub": 3873600 },
+            { "maxHp": 370, "under3yRub": 2834400, "from3yRub": 3981600 },
+            { "maxHp": 400, "under3yRub": 2949600, "from3yRub": 4094400 },
+            { "maxHp": 430, "under3yRub": 3067200, "from3yRub": 4209600 },
+            { "maxHp": 460, "under3yRub": 3189600, "from3yRub": 4327200 },
+            { "maxHp": 500, "under3yRub": 3316800, "from3yRub": 4447200 },
+            { "under3yRub": 3448800, "from3yRub": 4572000 }
+          ]
+        },
+        {
+          "maxCc": 3500,
+          "powerBrackets": [
+            { "maxHp": 160, "under3yRub": 2584000, "from3yRub": 3956200 },
+            { "maxHp": 190, "under3yRub": 2635200, "from3yRub": 4000800 },
+            { "maxHp": 220, "under3yRub": 2688000, "from3yRub": 4044000 },
+            { "maxHp": 250, "under3yRub": 2743200, "from3yRub": 4087200 },
+            { "maxHp": 280, "under3yRub": 2810400, "from3yRub": 4144800 },
+            { "maxHp": 310, "under3yRub": 2880000, "from3yRub": 4248000 },
+            { "maxHp": 340, "under3yRub": 3038400, "from3yRub": 4356000 },
+            { "maxHp": 370, "under3yRub": 3206400, "from3yRub": 4485600 },
+            { "maxHp": 400, "under3yRub": 3384000, "from3yRub": 4620000 },
+            { "maxHp": 430, "under3yRub": 3568800, "from3yRub": 4759200 },
+            { "maxHp": 460, "under3yRub": 3765600, "from3yRub": 4900800 },
+            { "maxHp": 500, "under3yRub": 3972000, "from3yRub": 5049600 },
+            { "under3yRub": 4190400, "from3yRub": 5200800 }
+          ]
+        },
+        {
+          "powerBrackets": [
+            { "maxHp": 160, "under3yRub": 3290600, "from3yRub": 4325800 },
+            { "maxHp": 190, "under3yRub": 3345600, "from3yRub": 4389600 },
+            { "maxHp": 220, "under3yRub": 3403200, "from3yRub": 4456800 },
+            { "maxHp": 250, "under3yRub": 3460800, "from3yRub": 4524000 },
+            { "maxHp": 280, "under3yRub": 3530400, "from3yRub": 4627200 },
+            { "maxHp": 310, "under3yRub": 3600000, "from3yRub": 4732800 },
+            { "maxHp": 340, "under3yRub": 3727200, "from3yRub": 4992000 },
+            { "maxHp": 370, "under3yRub": 3857600, "from3yRub": 5268000 },
+            { "maxHp": 400, "under3yRub": 3993600, "from3yRub": 5558400 },
+            { "maxHp": 430, "under3yRub": 4132800, "from3yRub": 5863200 },
+            { "maxHp": 460, "under3yRub": 4276800, "from3yRub": 6187200 },
+            { "maxHp": 500, "under3yRub": 4425600, "from3yRub": 6528000 },
+            { "under3yRub": 4581600, "from3yRub": 6885600 }
+          ]
+        }
+      ],
+      "comment": "Утильсбор с 01.12.2025 зависит от мощности двигателя (ПП РФ № 1713). Льгота 3 400 / 5 200 ₽ — только до 160 л.с. и до 3000 см³; выше действует полная шкала. Мощность в объявлении encar не публикуется, поэтому строка показывается прочерком."
     },
     "clearanceFeeBrackets": [
-      { "maxRub": 200000, "fee": 1067 },
-      { "maxRub": 450000, "fee": 2134 },
-      { "maxRub": 1200000, "fee": 4269 },
-      { "maxRub": 2700000, "fee": 11746 },
-      { "maxRub": 4200000, "fee": 16524 },
+      { "maxRub": 200000, "fee": 1231 },
+      { "maxRub": 450000, "fee": 2462 },
+      { "maxRub": 1200000, "fee": 4924 },
+      { "maxRub": 2700000, "fee": 13541 },
+      { "maxRub": 4200000, "fee": 18465 },
       { "maxRub": 5500000, "fee": 21344 },
-      { "maxRub": 7000000, "fee": 27540 },
-      { "fee": 30000 }
+      { "maxRub": 10000000, "fee": 49240 },
+      { "fee": 73860 }
     ]
   },
   "commissionNote": "Суммы предварительные: точный расчёт подтверждает менеджер перед заказом."

@@ -24,11 +24,20 @@ export type {
   MessengerConfig,
   MessengerType,
   PercentCostItem,
+  RecyclingDisplacementClass,
   RecyclingFeeConfig,
+  RecyclingPowerBracket,
+  RecyclingReducedRate,
+  UnknownCostItem,
   WidgetConfig,
 } from "./config.default";
 
-// TODO(U4): must match the final GitHub Pages domain of this repo.
+/**
+ * Pages origin of THIS repo (github.com/sstokarev/encar-ru). Changing the repo
+ * owner or name moves the statics: this URL, WIDGET_ORIGIN in
+ * src/loader/bookmarklet.ts and the extension's host permissions must move with
+ * it, otherwise clients keep fetching tariffs from an address nobody publishes.
+ */
 export const CONFIG_URL = "https://sstokarev.github.io/encar-ru/config.json";
 
 const FETCH_TIMEOUT_MS = 3000;
@@ -58,6 +67,10 @@ function isCostItem(value: unknown): value is CostItem {
       return isFiniteNumber(item["value"]);
     case "formula":
       return typeof item["value"] === "string";
+    case "unknown":
+      // A cost the importer has not priced yet: it renders as a dash and is
+      // excluded from the total, so an amount here would be silently dropped.
+      return item["value"] === undefined;
     default:
       return false;
   }
@@ -130,6 +143,30 @@ function isBracketArray(
   });
 }
 
+/** A recycling-fee cell: a RUB amount for a new car and for a used one. */
+function isFeeAmounts(entry: Record<string, unknown>): boolean {
+  return (
+    isFiniteNumber(entry["under3yRub"]) &&
+    entry["under3yRub"] >= 0 &&
+    isFiniteNumber(entry["from3yRub"]) &&
+    entry["from3yRub"] >= 0
+  );
+}
+
+/**
+ * The reduced personal-use recycling rate. Both caps are mandatory: a missing
+ * cap would read as "no limit" and hand a 300 hp car the 5 200 RUB rate.
+ */
+function isReducedRate(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const reduced = value as Record<string, unknown>;
+  return (
+    isPositiveNumber(reduced["maxCc"]) &&
+    isPositiveNumber(reduced["maxHp"]) &&
+    isFeeAmounts(reduced)
+  );
+}
+
 /** Structural validation of the customs tariff section (U6, R10). */
 function isCustomsConfig(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
@@ -163,11 +200,13 @@ function isCustomsConfig(value: unknown): boolean {
     isBracketArray(byAge["y5plus"], "maxCc", isPerCc) &&
     typeof fee === "object" &&
     fee !== null &&
-    isFiniteNumber(fee["smallMaxCc"]) &&
-    isFiniteNumber(fee["smallUnder3yRub"]) &&
-    isFiniteNumber(fee["smallFrom3yRub"]) &&
-    isFiniteNumber(fee["largeUnder3yRub"]) &&
-    isFiniteNumber(fee["largeFrom3yRub"]) &&
+    isReducedRate(fee["reduced"]) &&
+    // Recycling grid (PP RF 1713): displacement classes, each an ascending
+    // power-bracket array. Both levels get the same ordering guarantees as
+    // every other bracket array — a reordered row quotes the wrong cell.
+    isBracketArray(fee["classes"], "maxCc", (entry) =>
+      isBracketArray(entry["powerBrackets"], "maxHp", isFeeAmounts),
+    ) &&
     isBracketArray(
       customs["clearanceFeeBrackets"],
       "maxRub",

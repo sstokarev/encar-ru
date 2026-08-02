@@ -89,7 +89,11 @@ describe("scan -> calc: age near a duty bracket", () => {
       NOW,
     );
     const result = computeAllIn(
-      { priceKrw: 20_000_000, ...near },
+      // The power is supplied by hand: the DOM never carries one, and without
+      // it the recycling line dashes and the quote is a floor whatever the age
+      // says. This assertion is about the age wiring, so the lot has to be
+      // otherwise complete for the exact -> approx downgrade to be visible.
+      { priceKrw: 20_000_000, ...near, powerHp: 150 },
       ratesFor(DEFAULT_CONFIG),
       DEFAULT_CONFIG,
     );

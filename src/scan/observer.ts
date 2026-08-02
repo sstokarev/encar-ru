@@ -8,6 +8,17 @@
  *    writes can never trigger a rescan (or a rescan loop);
  *  - the listener receives the ROOTS of the batch — the added subtrees — so
  *    the scan can walk those instead of the whole document again.
+ *
+ * The pending roots are drained with iteration syntax, never Array.from.
+ * www.encar.com loads an ES5 polyfill bundle that REPLACES several built-ins
+ * (measured live 2026-08-02: Array.from, Object.keys, Object.values,
+ * Array.prototype.find, Array.prototype.filter). Its Array.from copies
+ * indices 0..length-1 only, so array-likes still work but iterables do not:
+ * `Array.from(new Set(["a"]))` yields `[]` there. Draining the Set that way
+ * handed every batch to the scan as ZERO roots — nothing added after
+ * activation was ever annotated (paging, filters, infinite scroll), while an
+ * explicit rescan() kept working because it passes no roots at all. Globals
+ * belong to the host page; spread is syntax and cannot be replaced.
  */
 
 import { BADGE_ATTR } from "./scanner";
@@ -49,7 +60,7 @@ export function observeDom(
 
   const observer = new MutationObserver((records) => {
     for (const record of records) {
-      for (const node of Array.from(record.addedNodes)) {
+      for (const node of [...record.addedNodes]) {
         if (isOwnWidgetNode(node)) continue;
         const root = scanRootOf(node);
         if (root === null || isOwnWidgetNode(root)) continue;
@@ -60,7 +71,7 @@ export function observeDom(
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
-      const roots = Array.from(pending);
+      const roots = [...pending];
       pending = new Set<Element>();
       onChange(roots);
     }, debounceMs);

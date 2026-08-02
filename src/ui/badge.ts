@@ -8,7 +8,8 @@
  * src/calc/customs.ts — the same number the breakdown totals (R1). It never
  * shows the bare converted lot price: that figure is not what the client
  * pays. When the lot params do not allow a customs computation the badge
- * says "по запросу" instead of inventing a number (R3, KTD3).
+ * says "по запросу" instead of inventing a number (R3, KTD3); when only some
+ * cost items are undeterminable the sum is a lower bound and is marked "от".
  *
  * U8: the badge must never disturb the host page layout. Two defenses:
  *  1. Placement — the badge is inserted *after* the price element and the
@@ -130,16 +131,40 @@ const BADGE_STYLE = `
   }
 `;
 
-/**
- * Formats a RUB amount as "≈ 12 345 678 ₽" (space-grouped thousands).
- * Pass approx=false to drop the marker for exact-precision values (R3).
- */
-export function formatRub(value: number, approx: boolean = true): string {
+/** Grouped RUB amount with no precision marker: "12 345 678 ₽". */
+export function formatAmountRub(value: number): string {
   const grouped = String(Math.round(value)).replace(
     /\B(?=(\d{3})+(?!\d))/g,
     " ",
   );
-  return approx ? `≈ ${grouped} ₽` : `${grouped} ₽`;
+  return `${grouped} ₽`;
+}
+
+/**
+ * The marker that tells the customer how to read the number:
+ *
+ *  - ""    exact — every cost item is computed from data;
+ *  - "≈ "  approx — complete, but some inputs were estimated, so the real
+ *          figure can land on either side of it;
+ *  - "от " partial — some cost items are not determinable yet and are not in
+ *          the sum, so the number is a lower bound and can only grow. "≈"
+ *          would be a lie here: it promises the price might also come out
+ *          lower, and it cannot.
+ */
+export function precisionPrefix(precision: BadgePrecision): string {
+  if (precision === "exact") return "";
+  return precision === "partial" ? "от " : "≈ ";
+}
+
+/**
+ * Formats a RUB amount with the marker its precision earns (R3):
+ * "12 345 678 ₽", "≈ 12 345 678 ₽" or "от 12 345 678 ₽".
+ */
+export function formatRub(
+  value: number,
+  precision: BadgePrecision = "approx",
+): string {
+  return `${precisionPrefix(precision)}${formatAmountRub(value)}`;
 }
 
 function isElement(node: Node): node is Element {
@@ -313,8 +338,19 @@ export function absorbBadge(badge: HTMLElement): void {
   badge.style.display = "none";
 }
 
+/**
+ * Precision values the presentation renders. Declared as a superset of the
+ * calculator's own Precision so the UI compiles both before and after the
+ * calculator learns to report a partial sum; once "partial" is part of
+ * Precision the union collapses onto it.
+ */
+export type BadgePrecision = AllInResult["precision"] | "partial";
+
 /** All-in figures the badge renders; the shape computeAllIn() returns. */
-export type BadgeTotal = Pick<AllInResult, "totalRub" | "precision">;
+export interface BadgeTotal {
+  totalRub: number;
+  precision: BadgePrecision;
+}
 
 /**
  * Where the numbers behind a rendered value come from (P1). Optional
@@ -371,9 +407,11 @@ export function markDegraded(
 
 /**
  * Badge text for an all-in result: "1 701 437 ₽" when exact, "≈ 1 701 437 ₽"
- * when computed from estimated params, and the honest "по запросу" when the
- * customs items are not computable — an "onRequest" total covers known items
- * only, so rendering it would understate the price (U6/U7, R3).
+ * when computed from estimated params, "от 1 701 437 ₽" when the sum is
+ * partial (some cost items are not determinable yet, so it is a lower bound),
+ * and the honest "по запросу" when nothing can be quoted at all — an
+ * "onRequest" total covers known items only, so rendering it would understate
+ * the price (U6/U7, R3).
  *
  * A non-finite total can only be an upstream bug (the calculator refuses to
  * produce one), and "≈ NaN ₽" is the worst thing a price badge can say: it is
@@ -384,7 +422,7 @@ export function badgeText(allIn: BadgeTotal): string {
   if (allIn.precision === "onRequest" || !Number.isFinite(allIn.totalRub)) {
     return ON_REQUEST_TEXT;
   }
-  return formatRub(allIn.totalRub, allIn.precision !== "exact");
+  return formatRub(allIn.totalRub, allIn.precision);
 }
 
 /**

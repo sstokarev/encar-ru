@@ -177,7 +177,10 @@ describe("card fixture params", () => {
 
   it("full card params convert to an exact-precision lot", () => {
     const lot = toLotDetails(extractCardParams(parseDoc(CARD_HTML)), NOW);
-    expect(lot.ageYears).toBe(9);
+    // Registered 2016-09, valued 2026-08-02: 118 full months counted from the
+    // end of the registration month. The age is NOT floored to whole years —
+    // the duty cliffs sit at 36 and 60 months, and flooring hid the second one.
+    expect(lot.ageYears! * 12).toBe(118);
     expect(lotPrecision(lot)).toBe("exact");
   });
 
@@ -289,8 +292,8 @@ describe("hybrid rows in the listing fixture (U7)", () => {
     }
 
     // The 1.6 E-TECH row exposes a displacement in its title, so this hybrid
-    // must end up with a real all-in total; the other hybrid row has no
-    // displacement anywhere and stays honestly on request.
+    // must end up with a real all-in total (a floor: a hybrid's recycling fee
+    // needs the combined ICE + electric power, which no listing carries).
     const etech = rows.find((row) =>
       (row.querySelector(".dtl")?.textContent ?? "").includes("E-TECH"),
     );
@@ -306,7 +309,7 @@ describe("hybrid rows in the listing fixture (U7)", () => {
       "[data-encar-ru-badge]",
     );
     expect(etechBadge).not.toBeNull();
-    expect(badgeText(etechBadge!)).toMatch(/^≈ \d{1,3}( \d{3})* ₽$/);
+    expect(badgeText(etechBadge!)).toMatch(/^от \d{1,3}( \d{3})* ₽$/);
   });
 });
 
@@ -347,9 +350,11 @@ describe("degradation on nonstandard blocks", () => {
     await runWidget();
     const hosts = badgeHosts();
     expect(hosts.length).toBe(1);
-    // No year and no displacement: the all-in total is not computable, so
-    // the badge shows the marker rather than an invented number.
-    expect(badgeText(hosts[0]!)).toBe("по запросу");
+    // No year and no displacement: duty and the recycling fee cannot be
+    // computed and dash. What IS proven — the lot price (8,000,000 KRW *
+    // 0.055 = 440,000) and its clearance fee (2,462) — is quoted as a floor.
+    // Refusing to show a price we do know helps nobody.
+    expect(badgeText(hosts[0]!)).toBe("от 442 462 ₽");
   });
 });
 
@@ -360,32 +365,38 @@ describe("precision wiring (AE1)", () => {
     const hosts = badgeHosts();
     expect(hosts.length).toBeGreaterThan(0);
     for (const host of hosts) {
-      // Either an approximate all-in total or the honest marker — never a
+      // Either a lower-bound all-in total or the honest marker — never a
       // bare (exact-looking) number.
-      expect(badgeText(host)).toMatch(/^(≈ |по запросу$)/);
+      expect(badgeText(host)).toMatch(/^(от |по запросу$)/);
     }
-    expect(hosts.some((h) => badgeText(h).startsWith("≈ "))).toBe(true);
+    expect(hosts.some((h) => badgeText(h).startsWith("от "))).toBe(true);
   });
 
-  it("card with full params computes exactly, without the marker", async () => {
+  it("card with full params quotes every provable line as a floor", async () => {
     window.history.replaceState(null, "", DETAIL_PATH);
     loadFixture(CARD_HTML);
     await runWidget();
 
     const hosts = badgeHosts();
     expect(hosts.length).toBe(1);
-    // The badge shows the all-in ("под ключ") total, not the lot price:
-    // exact precision, so no "≈" prefix.
-    expect(badgeText(hosts[0]!)).toBe("1 687 875 ₽");
+    // The badge shows the all-in ("под ключ") total, not the lot price. The
+    // card publishes age, fuel and displacement but never engine power, so the
+    // recycling fee dashes and the total is a lower bound.
+    expect(badgeText(hosts[0]!)).toBe("от 1 314 880 ₽");
 
     const panel = breakdownPanel();
-    expect(panel.getAttribute("data-precision")).toBe("exact");
-    // Embedded config, age 9y (y5plus), 2199cc diesel:
-    //   lot 362,450 + shipping 220,000 + duty 4.8*2199*90 = 949,968
-    //   + recycling 5,200 + clearance 2,134 + sbkts 45,000 + broker 85,000
-    //   + commission 5% = 18,123 -> total 1,687,875.
-    expect(totalValue(panel)).toBe("1 687 875 ₽");
+    expect(panel.getAttribute("data-precision")).toBe("partial");
+    // Embedded config, 118 months old (y5plus), 2199cc diesel:
+    //   lot 362,450 + duty 4.8*2199*90 = 949,968 + clearance 2,462
+    //   -> 1,314,880. Recycling dashes (no power); shipping, sbkts, broker and
+    //   the commission are "unknown" items and add nothing.
+    expect(totalValue(panel)).toBe("от 1 314 880 ₽");
+    // A floor is not an approximation: nothing here may come out LOWER, so the
+    // "≈" reason line stays off.
     expect(panel.querySelector("[data-approx-reason]")).toBeNull();
+    expect(
+      panel.querySelector("[data-pending-note]")?.textContent,
+    ).toContain("Утилизационный сбор");
   });
 
   it("badge and breakdown always show the same total for the same lot", async () => {
@@ -400,7 +411,7 @@ describe("precision wiring (AE1)", () => {
     expect(badgeText(hosts[0]!)).toBe(totalValue(breakdownPanel()));
   });
 
-  it("card with an estimated cc degrades to approx with a reason line", async () => {
+  it("card with an estimated cc stays a floor, never an approximation", async () => {
     window.history.replaceState(null, "", DETAIL_PATH);
     loadFixture(CARD_HTML);
     for (const script of Array.from(document.querySelectorAll("script"))) {
@@ -413,16 +424,17 @@ describe("precision wiring (AE1)", () => {
 
     const hosts = badgeHosts();
     expect(hosts.length).toBe(1);
-    expect(badgeText(hosts[0]!)).toBe("≈ 1 687 875 ₽");
+    // Estimated 2.2 -> 2199cc lands on the same duty bracket, so the number is
+    // unchanged. The marker is "от", not "≈": a quote that is already a floor
+    // cannot be described as "might also come out lower" just because one of
+    // its inputs was estimated (pinned in test/calc.test.ts — "partial" wins
+    // over "approx").
+    expect(badgeText(hosts[0]!)).toBe("от 1 314 880 ₽");
 
     const panel = breakdownPanel();
-    expect(panel.getAttribute("data-precision")).toBe("approx");
-    // Estimated 2.2 -> 2199cc lands on the same duty bracket: same total,
-    // but prefixed as approximate.
-    expect(totalValue(panel)).toBe("≈ 1 687 875 ₽");
-    expect(
-      panel.querySelector("[data-approx-reason]")?.textContent,
-    ).toBe("Приблизительно: не все данные лота видны");
+    expect(panel.getAttribute("data-precision")).toBe("partial");
+    expect(totalValue(panel)).toBe("от 1 314 880 ₽");
+    expect(panel.querySelector("[data-approx-reason]")).toBeNull();
   });
 
   it("an EV card stays on-request per U6", async () => {

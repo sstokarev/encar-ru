@@ -17,6 +17,25 @@ import { buildOrderLink } from "../src/ui/order-button";
 import type { ResolvedRates } from "../src/rates/cbr";
 import { init } from "../src/main";
 
+/**
+ * Calculator result override. The UI is tested against the calculator's
+ * *contract*, not against today's implementation: a test can hand
+ * attachBreakdown a result with unknown (undetermined) cost items and a
+ * partial total, which the calculator does not produce yet. Null — the
+ * default, restored after every test — keeps the real implementation, so all
+ * other tests still exercise the real math.
+ */
+const calcOverride = vi.hoisted(() => ({ result: null as unknown }));
+
+vi.mock("../src/calc/customs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/calc/customs")>();
+  return {
+    ...actual,
+    computeAllIn: (...args: Parameters<typeof actual.computeAllIn>) =>
+      calcOverride.result ?? actual.computeAllIn(...args),
+  };
+});
+
 function readFixture(name: string): string {
   return readFileSync(resolve("test/fixtures", name), "utf8");
 }
@@ -119,6 +138,14 @@ function splitsPriceText(host: HTMLElement): boolean {
   return false;
 }
 
+function rowOf(host: HTMLElement, itemId: string): HTMLElement {
+  const row = panelOf(host).querySelector<HTMLElement>(
+    `[data-item-id="${itemId}"]`,
+  );
+  if (!row) throw new Error(`row ${itemId} not found`);
+  return row;
+}
+
 function rowValue(host: HTMLElement, itemId: string): string {
   const row = panelOf(host).querySelector(`[data-item-id="${itemId}"]`);
   return row?.querySelector("[data-value]")?.textContent ?? "";
@@ -160,6 +187,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  calcOverride.result = null;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -250,10 +278,15 @@ describe("breakdown panel", () => {
   };
   // 10,000,000 KRW * 0.05 = 500,000 lot; +100,000 fixed; +10% = 50,000
   const KRW = 10_000_000;
-  /** Full lot params: the customs formulas compute exactly (U6). */
+  /**
+   * Full lot params: the customs formulas compute exactly (U6). Engine power
+   * is part of "full" since ПП РФ 1713 made the recycling fee depend on it —
+   * without it that line dashes and the total is only a floor.
+   */
   const LOT: BreakdownLotDetails = {
     ageYears: 4,
     engineCc: 2000,
+    powerHp: 150,
     fuel: "gasoline",
   };
 
@@ -273,18 +306,18 @@ describe("breakdown panel", () => {
   });
 
   it("lists computed cost items and total for a full-params lot", () => {
-    // U6 real math at krwRub 0.05 / eurRub 90 with LOT (age 4, 2000cc):
+    // U6 real math at krwRub 0.05 / eurRub 90 with LOT (age 4, 2000cc, 150hp):
     //   lot 500,000; shipping 100,000; commission 10% = 50,000;
     //   duty 2.7 EUR/cc * 2000 = 5,400 EUR * 90 = 486,000;
-    //   recycling 5,200 (>=3y, <=3000cc); clearance 4,269 (lot <= 1,200,000);
-    //   total 1,145,469.
+    //   recycling 5,200 (>=3y, <=3000cc, <=160hp); clearance 4,924
+    //   (lot <= 1,200,000, ПП РФ 1638); total 1,146,124.
     const result = computeAllIn(
       { priceKrw: KRW, ...LOT },
       { krwRub: 0.05, eurRub: 90 },
       CLEAN_CONFIG,
     );
     expect(result.precision).toBe("exact");
-    expect(result.totalRub).toBe(1_145_469);
+    expect(result.totalRub).toBe(1_146_124);
 
     const host = attachDirect(CLEAN_CONFIG, KRW, "remote", LOT);
     toggleOf(host).click();
@@ -307,23 +340,36 @@ describe("breakdown panel", () => {
     expect(rowValue(host, "commission")).toBe("50 000 ₽");
     expect(rowValue(host, "duty")).toBe("486 000 ₽");
     expect(rowValue(host, "recycling")).toBe("5 200 ₽");
-    expect(rowValue(host, "clearance")).toBe("4 269 ₽");
-    expect(rowValue(host, "total")).toBe("1 145 469 ₽");
+    expect(rowValue(host, "clearance")).toBe("4 924 ₽");
+    expect(rowValue(host, "total")).toBe("1 146 124 ₽");
     expect(panelOf(host).getAttribute("data-precision")).toBe("exact");
   });
 
-  it("marks the total 'on request' when lot params are unknown", () => {
+  it("quotes a floor when lot params are unknown, and says which lines are missing", () => {
     const host = attachDirect(CLEAN_CONFIG, KRW);
     toggleOf(host).click();
     const panel = panelOf(host);
 
-    // Customs items are not computable: only known items are listed (U6).
+    // Duty and the recycling fee are not computable, but they keep their rows
+    // as dashes — a dropped row is a total that is short with nothing looking
+    // broken. The clearance fee only needs the lot value, so it is a number.
     const rowIds = Array.from(panel.querySelectorAll("[data-item-id]")).map(
       (row) => row.getAttribute("data-item-id"),
     );
-    expect(rowIds).toEqual(["lot", "shipping", "commission", "total"]);
-    expect(rowValue(host, "total")).toBe("расчёт по запросу");
-    expect(panel.getAttribute("data-precision")).toBe("onRequest");
+    expect(rowIds).toEqual([
+      "lot",
+      "shipping",
+      "commission",
+      "duty",
+      "recycling",
+      "clearance",
+      "total",
+    ]);
+    expect(rowValue(host, "duty")).toBe("—");
+    expect(rowValue(host, "recycling")).toBe("—");
+    // 500,000 + 100,000 + 50,000 + 4,924 clearance = 654,924, a lower bound.
+    expect(rowValue(host, "total")).toBe("от 654 924 ₽");
+    expect(panel.getAttribute("data-precision")).toBe("partial");
   });
 
   it("marks the total 'on request' for an EV lot", () => {
@@ -374,6 +420,107 @@ describe("breakdown panel", () => {
     const toggle = toggleOf(host);
     expect(parseInt(toggle.style.minWidth, 10)).toBeGreaterThanOrEqual(44);
     expect(parseInt(toggle.style.minHeight, 10)).toBeGreaterThanOrEqual(44);
+  });
+
+  /**
+   * Contract under construction (calculator side, agent "tariffs"): a cost
+   * item may carry no amount, the customs block may be undeterminable, and the
+   * total is then a lower bound flagged by precision "partial". The panel must
+   * show WHAT is not counted yet instead of quietly dropping the row.
+   */
+  describe("partial total: undetermined cost items", () => {
+    /** A result the calculator cannot produce yet — see calcOverride. */
+    function partialResult(): unknown {
+      return {
+        items: [
+          { id: "lot", label: "Цена лота", rub: 500_000 },
+          { id: "shipping", label: "Доставка" },
+          { id: "customs", label: "Таможня" },
+          { id: "commission", label: "Комиссия" },
+        ],
+        totalRub: 500_000,
+        precision: "partial",
+        notes: [],
+      };
+    }
+
+    it("renders an undetermined item as a dash instead of dropping the row", () => {
+      calcOverride.result = partialResult();
+      const host = attachDirect(CLEAN_CONFIG, KRW);
+      toggleOf(host).click();
+
+      const rowIds = Array.from(
+        panelOf(host).querySelectorAll("[data-item-id]"),
+      ).map((row) => row.getAttribute("data-item-id"));
+      expect(rowIds).toEqual([
+        "lot",
+        "shipping",
+        "customs",
+        "commission",
+        "total",
+      ]);
+      expect(rowValue(host, "lot")).toBe("500 000 ₽");
+      expect(rowValue(host, "shipping")).toBe("—");
+      expect(rowValue(host, "customs")).toBe("—");
+      // The dashed rows are muted, so the eye reads them as "not counted yet".
+      expect(rowOf(host, "shipping").hasAttribute("data-unknown")).toBe(true);
+      expect(rowOf(host, "lot").hasAttribute("data-unknown")).toBe(false);
+      expect(styleOf(host)).toContain("[data-unknown]");
+    });
+
+    it("renders the partial total as a lower bound, never as '≈'", () => {
+      calcOverride.result = partialResult();
+      const host = attachDirect(CLEAN_CONFIG, KRW);
+      toggleOf(host).click();
+      expect(rowValue(host, "total")).toBe("от 500 000 ₽");
+      expect(panelOf(host).getAttribute("data-precision")).toBe("partial");
+      expect(toggleValue(host)).toBe("от 500 000 ₽");
+    });
+
+    it("notes in Russian which items the total does not include yet", () => {
+      calcOverride.result = partialResult();
+      const host = attachDirect(CLEAN_CONFIG, KRW);
+      const note =
+        panelOf(host).querySelector("[data-pending-note]")?.textContent ?? "";
+      expect(note).toContain("Доставка");
+      expect(note).toContain("Комиссия");
+      expect(note).toContain("Таможня");
+      // Cyrillic only: no English leaked into a customer-facing string.
+      expect(note).not.toMatch(/[A-Za-z]/);
+    });
+
+    it("shows no pending note when every item has an amount", () => {
+      const host = attachDirect(CLEAN_CONFIG, KRW, "remote", LOT);
+      expect(panelOf(host).querySelector("[data-pending-note]")).toBeNull();
+      expect(panelOf(host).querySelector("[data-unknown]")).toBeNull();
+    });
+
+    it("keeps the calculator's own notes alongside the pending note", () => {
+      calcOverride.result = {
+        ...(partialResult() as { items: unknown[] }),
+        notes: ["Возраст близок к границе таможенного режима."],
+      };
+      const host = attachDirect(CLEAN_CONFIG, KRW);
+      expect(
+        panelOf(host).querySelector("[data-calc-note]")?.textContent,
+      ).toBe("Возраст близок к границе таможенного режима.");
+      expect(panelOf(host).querySelector("[data-pending-note]")).not.toBeNull();
+    });
+
+    it("keeps Esc, outside click and the order button working", () => {
+      calcOverride.result = partialResult();
+      const host = attachDirect(CLEAN_CONFIG, KRW);
+      toggleOf(host).click();
+      expect(panelOf(host).hidden).toBe(false);
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      expect(panelOf(host).hidden).toBe(true);
+
+      toggleOf(host).click();
+      document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(panelOf(host).hidden).toBe(true);
+      expect(panelOf(host).querySelector("[data-order-button]")).not.toBeNull();
+      expect(panelOf(host).querySelector("[data-rate-date]")).not.toBeNull();
+    });
   });
 
   describe("overlay presentation (U8)", () => {
@@ -660,6 +807,20 @@ describe("badge total (R1)", () => {
       "по запросу",
     );
   });
+
+  it("renders a partial sum as a lower bound: 'от N ₽', never '≈'", () => {
+    // Some cost items are not determinable yet, so the sum can only grow:
+    // "≈" would claim the number can also come out lower.
+    const text = badgeLabel({ totalRub: 1_701_437, precision: "partial" });
+    expect(text).toBe("от 1 701 437 ₽");
+    expect(text).not.toContain("≈");
+  });
+
+  it("still refuses to print a non-finite partial total", () => {
+    expect(badgeLabel({ totalRub: Number.NaN, precision: "partial" })).toBe(
+      "по запросу",
+    );
+  });
 });
 
 describe("order button deep links", () => {
@@ -764,11 +925,12 @@ describe("integration with the widget entry point", () => {
     });
     const host = breakdownHost()!;
     // DEFAULT_CONFIG: lot 6,590,000 * 0.055 = 362,450. U7 card params
-    // (2016/09, 2199cc diesel, age >5y): + shipping 220,000 + duty
-    // 4.8*2199*90 = 949,968 + recycling 5,200 + clearance 2,134 + sbkts
-    // 45,000 + broker 85,000 + commission 5% = 18,123 -> 1,687,875 exact.
+    // (2016/09, 2199cc diesel, 118 months old -> y5plus): + duty
+    // 4.8*2199*90 = 949,968 + clearance 2,462 -> 1,314,880. The recycling fee
+    // dashes (a card publishes no engine power) and shipping / sbkts / broker
+    // / commission are "unknown" items, so the total is a floor.
     expect(rowValue(host, "lot")).toBe("362 450 ₽");
-    expect(rowValue(host, "total")).toBe("1 687 875 ₽");
+    expect(rowValue(host, "total")).toBe("от 1 314 880 ₽");
     expect(
       panelOf(host).querySelector("[data-embedded-marker]"),
     ).not.toBeNull();
