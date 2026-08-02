@@ -410,6 +410,20 @@ function dropStaleHosts(scope: ParentNode): void {
 }
 
 /**
+ * Removes the control row of a price element and forgets it, so the next pass
+ * builds a new one (U11). dropStaleHosts cannot do this: it sweeps rows whose
+ * price element is GONE, while a soft navigation that rewrites the price in
+ * place leaves the element connected and only changes the car it describes.
+ */
+export function detachBreakdown(price: Element): void {
+  const host = attachedHosts.get(price);
+  if (host === undefined) return;
+  attachedHosts.delete(price);
+  hostPrices.delete(host);
+  host.remove();
+}
+
+/**
  * Renders the detail-page control for a price candidate: one tappable row
  * showing the all-in RUB total, expanding into the cost breakdown overlay.
  * Idempotent per price element.

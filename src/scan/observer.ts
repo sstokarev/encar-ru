@@ -49,6 +49,49 @@ function scanRootOf(node: Node): Element | null {
   return node.parentElement;
 }
 
+/**
+ * How often the URL is compared with the previous one. A soft navigation is a
+ * user action, so a sub-second lag is invisible; the check itself is a string
+ * comparison.
+ */
+const URL_POLL_MS = 700;
+
+/**
+ * Calls back on every client-side navigation (U11).
+ *
+ * `popstate` and `hashchange` cover the back button and www.encar.com's
+ * hash-routed search list, but NEITHER fires for history.pushState — which is
+ * how fem.encar.com opens a car screen. Patching History.prototype would catch
+ * it, at the price of rewriting a global of a page we do not own (and of
+ * breaking whichever other script patched it first), so the remaining case is
+ * covered by polling location.href.
+ *
+ * Returns a stop function; the widget never calls it in the browser (the page
+ * outlives the widget), but a test that leaves the timer running would rescan
+ * across its neighbours.
+ */
+export function watchUrl(
+  win: Window,
+  onChange: (url: string) => void,
+  pollMs: number = URL_POLL_MS,
+): () => void {
+  let current = win.location.href;
+  const check = (): void => {
+    const next = win.location.href;
+    if (next === current) return;
+    current = next;
+    onChange(next);
+  };
+  win.addEventListener("popstate", check);
+  win.addEventListener("hashchange", check);
+  const timer = win.setInterval(check, pollMs);
+  return () => {
+    win.clearInterval(timer);
+    win.removeEventListener("popstate", check);
+    win.removeEventListener("hashchange", check);
+  };
+}
+
 export function observeDom(
   target: Node,
   onChange: (roots: Element[]) => void,

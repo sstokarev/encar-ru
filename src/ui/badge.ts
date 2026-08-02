@@ -235,6 +235,28 @@ export function findWidgetHost(price: Element, attr: string): Element | null {
   return null;
 }
 
+/**
+ * Removes the badge attached to a price element and clears its annotation
+ * marker, so the next scan treats the price as new (U11). Used when the page
+ * rewrites a price in place — the element survives a soft navigation, the
+ * number on it does not.
+ *
+ * Both places a host can sit are swept: inside the price element, and in the
+ * sibling chain that follows the price tail (see insertWidgetHost).
+ */
+export function detachBadge(price: Element): void {
+  price.removeAttribute(ANNOTATED_ATTR);
+  for (const inside of [...price.querySelectorAll(`[${WIDGET_HOST_ATTR}]`)]) {
+    inside.remove();
+  }
+  let node: ChildNode | null = priceTail(price).nextSibling;
+  while (node !== null && isElement(node) && node.hasAttribute(WIDGET_HOST_ATTR)) {
+    const next: ChildNode | null = node.nextSibling;
+    node.remove();
+    node = next;
+  }
+}
+
 /** Inline layout guards: host-page CSS outranks :host rules in the shadow. */
 export function applyHostLayoutGuards(host: HTMLElement): void {
   host.style.display = "inline-block";
@@ -441,7 +463,9 @@ export function attachBadge(
 ): void {
   const el = candidate.element;
   if (el.hasAttribute(ANNOTATED_ATTR)) return;
-  el.setAttribute(ANNOTATED_ATTR, "1");
+  // The marker carries the price it was computed from, so a later pass can
+  // tell an untouched badge from one left over by a previous car (U11).
+  el.setAttribute(ANNOTATED_ATTR, String(candidate.krw));
 
   const doc = el.ownerDocument;
   const host = doc.createElement("span");

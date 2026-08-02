@@ -28,7 +28,8 @@
  */
 
 import { PRICE_ELEMENT_SELECTOR, scanPrices } from "./scan/scanner";
-import { observeDom } from "./scan/observer";
+import { observeDom, watchUrl } from "./scan/observer";
+import { refreshStale } from "./scan/refresh";
 import {
   extractCardParams,
   extractListingParams,
@@ -42,7 +43,7 @@ import { DEFAULT_CONFIG } from "./config.default";
 import { resolveRates, type ResolvedRates } from "./rates/cbr";
 import { applyDictionary, showTranslateHint } from "./translate/apply";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 
 interface EncarRuApi {
   version: string;
@@ -109,6 +110,15 @@ export function init(): void {
       ratesPromise,
     ]);
     const detail = isDetailPage(window.location.href);
+    // U11: both encar front-ends are SPAs, so a badged price element can
+    // survive into another car with a new number on it. Drop the annotations
+    // that no longer describe what the page shows BEFORE scanning, and the
+    // scan picks those prices up as if they were new.
+    if (roots === undefined) {
+      refreshStale(document);
+    } else {
+      for (const root of roots) refreshStale(root);
+    }
     const candidates =
       roots === undefined ? scanPrices(document) : scanPrices(document, roots);
 
@@ -182,6 +192,14 @@ export function init(): void {
     // the initial pass and for an explicit rescan() from the API.
     observeDom(document, (roots) => {
       void annotate(roots);
+    });
+    // U11: a client-side route change is the one event that means "different
+    // car" even when the DOM the observer sees barely moves — and on a detail
+    // screen it also decides whether the breakdown belongs on the page at all
+    // (isDetailPage reads the URL). A soft navigation therefore gets a full
+    // pass, not an incremental one.
+    watchUrl(window, () => {
+      rescan();
     });
   };
 

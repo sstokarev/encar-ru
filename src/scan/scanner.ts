@@ -31,7 +31,12 @@ export interface PriceCandidate {
   krw: number;
 }
 
-/** Marker set on annotated price elements (idempotency). */
+/**
+ * Marker set on annotated price elements (idempotency). Its VALUE is the KRW
+ * amount the attached badge was computed from — an SPA that rewrites a price
+ * in place keeps the same element, so the marker alone cannot tell "already
+ * done" from "done for the car that used to be here" (see refreshStale).
+ */
 export const ANNOTATED_ATTR = "data-encar-ru";
 /** Marker carried by badge host elements. */
 export const BADGE_ATTR = "data-encar-ru-badge";
@@ -75,6 +80,15 @@ export function parsePriceText(text: string): number | null {
   const manwon = parseNumber(match[1]);
   if (!Number.isFinite(manwon) || manwon <= 0) return null;
   return manwon * MANWON_PER_KRW;
+}
+
+/**
+ * The KRW price an already-found price element currently shows. Exported for
+ * the staleness check: it must read the price exactly the way the scan did,
+ * otherwise every rescan would "detect" a change and rebuild every badge.
+ */
+export function readPriceKrw(el: Element): number | null {
+  return priceFromElement(el);
 }
 
 function priceFromElement(el: Element): number | null {
