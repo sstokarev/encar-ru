@@ -26,6 +26,10 @@
   details[open] summary{margin-bottom:8px}
   .faq p{margin:.3em 0 1em}
   .faq b{display:block}
+  .detected{background:#eef7ee;border:1px solid #cde3cd;border-radius:12px;padding:10px 16px;font-size:.95rem}
+  .switch{margin:18px 0 0}
+  .switch button{background:none;border:0;padding:8px 0;color:#c00;font:600 .95rem inherit;font-family:inherit;cursor:pointer}
+  section[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -34,22 +38,33 @@
   <p>Смотрите машины на encar.com — а рядом с каждой ценой в вонах появится цена <span class="badge-demo">≈ в рублях под ключ</span>. На странице машины плашка раскрывается в полный расчёт: пошлина, доставка, комиссия.</p>
   <div class="note">Расчёт предварительный — итоговую цену подтверждает менеджер перед заказом.</div>
 
-  <h2>Компьютер: поставить один раз</h2>
-  <div class="card">
-    <p>Для Chrome, Edge, Яндекс.Браузера и Opera есть расширение: ставится один раз и дальше работает само на всех страницах encar — ничего нажимать не нужно.</p>
-    <div class="actions">
-      <a class="bm" href="encar-ru-extension.zip" download>Скачать расширение</a>
-    </div>
-    <div class="step"><div class="num">1</div><div>Скачайте архив и распакуйте его в постоянную папку (не в «Загрузки» — если папку удалить, расширение отключится)</div></div>
-    <div class="step"><div class="num">2</div><div>Откройте <code>chrome://extensions</code> и включите <b>«Режим разработчика»</b> в правом верхнем углу</div></div>
-    <div class="step"><div class="num">3</div><div>Нажмите <b>«Загрузить распакованное расширение»</b> и выберите распакованную папку</div></div>
-    <div class="step"><div class="num">4</div><div>Откройте <a href="https://www.encar.com" target="_blank" rel="noopener">encar.com</a> — цены в рублях появятся сами, на любой странице</div></div>
-    <p class="muted">Если расширения нет в списке — проверьте, что выбрали папку с файлом <code>manifest.json</code> внутри, а не сам архив.</p>
-  </div>
+  <p class="detected" id="detected" hidden></p>
 
-  <h2>iPhone и Android: кнопка «Цена в РФ»</h2>
+  <section data-path="ext">
+  <h2>Ваш браузер: поставить один раз</h2>
   <div class="card">
-    <p>На телефоне расширения не ставятся, поэтому там работает закладка: код копируют один раз, а дальше нажимают закладку на той странице encar, где нужны рубли.</p>
+    <p>Для Chrome, Яндекс.Браузера, Edge и Opera есть расширение: ставится один раз и дальше работает само на всех страницах encar — ни на что нажимать не нужно, цены появляются и после обновления страницы.</p>
+    <p class="muted" id="opera-note" hidden>В Opera расширения из магазина Chrome ставятся после установки дополнения «Install Chrome Extensions» из магазина Opera — это делается один раз.</p>
+    <!-- STORE LINK: заменить блок ниже на <a class="bm" href="<ссылка из магазина>">Установить расширение</a>, когда магазин одобрит публикацию. -->
+    <div class="note">Расширение проходит проверку магазина — ссылка на установку в один клик появится здесь. Пока его можно поставить вручную, это пять минут: разверните инструкцию ниже.</div>
+    <details>
+      <summary>Установка вручную (временно, пока нет ссылки из магазина)</summary>
+      <div class="actions">
+        <a class="bm" href="encar-ru-extension.zip" download>Скачать расширение</a>
+      </div>
+      <div class="step"><div class="num">1</div><div>Скачайте архив и распакуйте его в постоянную папку (не в «Загрузки» — если папку удалить, расширение отключится)</div></div>
+      <div class="step"><div class="num">2</div><div>Откройте <code>chrome://extensions</code> и включите <b>«Режим разработчика»</b> в правом верхнем углу</div></div>
+      <div class="step"><div class="num">3</div><div>Нажмите <b>«Загрузить распакованное расширение»</b> и выберите распакованную папку</div></div>
+      <div class="step"><div class="num">4</div><div>Откройте <a href="https://www.encar.com" target="_blank" rel="noopener">encar.com</a> — цены в рублях появятся сами, на любой странице</div></div>
+      <p class="muted">Если расширения нет в списке — проверьте, что выбрали папку с файлом <code>manifest.json</code> внутри, а не сам архив.</p>
+    </details>
+  </div>
+  </section>
+
+  <section data-path="bm">
+  <h2>Кнопка «Цена в РФ»</h2>
+  <div class="card">
+    <p>Расширения здесь не ставятся, поэтому работает закладка: код копируют один раз, а дальше нажимают закладку на той странице encar, где нужны рубли.</p>
     <div class="actions">
       <a class="bm" id="bm-link" href="#">Цена в РФ</a>
       <button class="copy" id="bm-copy" type="button">Скопировать код</button>
@@ -57,7 +72,9 @@
     <textarea class="code" id="bm-code" readonly aria-label="Код кнопки"></textarea>
     <p class="muted">Если кнопка «Скопировать код» не сработала, код появится в поле выше — выделите его и скопируйте вручную.</p>
   </div>
+  </section>
 
+  <section data-path="ios">
   <h2>iPhone и iPad (Safari)</h2>
   <div class="card">
     <div class="step"><div class="num">1</div><div>На этой странице нажмите <b>«Скопировать код»</b> (или задержите палец на красной кнопке <b>«Цена в РФ»</b> и выберите <b>«Скопировать ссылку»</b>)</div></div>
@@ -72,15 +89,19 @@
       </div>
     </details>
   </div>
+  </section>
 
+  <section data-path="desktop">
   <h2>Компьютер без расширения</h2>
   <div class="card">
-    <p class="muted">Если расширение ставить не хочется, на компьютере работает та же закладка.</p>
+    <p class="muted">Если расширение ставить не хочется или ваш браузер их не поддерживает, на компьютере работает та же закладка.</p>
     <div class="step"><div class="num">1</div><div>Перетащите красную кнопку <b>«Цена в РФ»</b> (выше) на панель закладок браузера</div></div>
     <div class="step"><div class="num">2</div><div>Откройте <a href="https://www.encar.com" target="_blank" rel="noopener">encar.com</a>, найдите машины</div></div>
     <div class="step"><div class="num">3</div><div>Нажмите закладку <b>«Цена в РФ»</b> — рядом с ценами появятся рубли</div></div>
   </div>
+  </section>
 
+  <section data-path="android">
   <h2>Android (Chrome)</h2>
   <div class="card">
     <div class="step"><div class="num">1</div><div>Нажмите <b>«Скопировать код»</b> в блоке выше</div></div>
@@ -88,6 +109,9 @@
     <div class="step"><div class="num">3</div><div>Откройте Меню → Закладки, найдите её и нажмите <b>Изменить</b>: имя — <code>рф</code>, а в поле адреса вставьте скопированный код вместо старого адреса</div></div>
     <div class="step"><div class="num">4</div><div>Теперь на любой странице encar.com наберите в адресной строке <code>рф</code> и нажмите на появившуюся закладку — рядом с ценами появятся рубли</div></div>
   </div>
+  </section>
+
+  <p class="switch" id="switch" hidden><button type="button" id="show-all">Другой браузер или устройство →</button></p>
 
   <h2>Перевод сайта на русский</h2>
   <div class="card">
@@ -116,9 +140,78 @@
     <p>Проверьте, что вы вставили код в строку <b>адреса</b> закладки, а не в строку имени, и что он начинается с <code>javascript:</code>. Если Safari обрезал начало — вставьте код заново.</p>
   </div>
 
-  <p class="muted">Вопросы и заказ автомобиля — у вашего менеджера.</p>
+  <p class="muted">Вопросы и заказ автомобиля — у вашего менеджера. <a href="privacy.html">Политика конфиденциальности</a>.</p>
 </div>
 <script>
+  // Shows the ONE path that fits the visitor's browser and hides the rest.
+  // A client opening this page should not have to work out whether they are
+  // the "Chrome" case or the "Android" case — six parallel instructions is
+  // how a premium service starts looking like a manual. Everything stays
+  // reachable behind one link, and if this script fails the page degrades to
+  // what it was: all sections visible.
+  (function () {
+    var ua = navigator.userAgent || '';
+    var isIOS = /iPad|iPhone|iPod/.test(ua) ||
+      (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    var isAndroid = /Android/.test(ua);
+    // Chromium desktop families that can install the extension.
+    var isChromium = /YaBrowser|Chrome\/|Chromium\/|Edg\/|OPR\//.test(ua);
+
+    var path = isIOS ? 'ios' : isAndroid ? 'android' : isChromium ? 'ext' : 'desktop';
+    // Which sections belong to each path; "bm" is the shared bookmarklet code.
+    // The extension path also keeps the bookmarklet visible: it is the option
+    // that works in the next ten seconds, with nothing installed.
+    var SHOW = {
+      ext: ['ext', 'bm', 'desktop'],
+      ios: ['bm', 'ios'],
+      android: ['bm', 'android'],
+      desktop: ['bm', 'desktop'],
+    };
+    var NAMES = [
+      [/YaBrowser/, 'Яндекс.Браузер'],
+      [/Edg\//, 'Edge'],
+      [/OPR\//, 'Opera'],
+      [/Chrome\//, 'Chrome'],
+      [/Firefox\//, 'Firefox'],
+      [/Safari/, 'Safari'],
+    ];
+    function browserName() {
+      for (var i = 0; i < NAMES.length; i++) {
+        if (NAMES[i][0].test(ua)) return NAMES[i][1];
+      }
+      return '';
+    }
+
+    var sections = document.querySelectorAll('section[data-path]');
+    function apply(list) {
+      for (var i = 0; i < sections.length; i++) {
+        var name = sections[i].getAttribute('data-path');
+        sections[i].hidden = list !== null && list.indexOf(name) === -1;
+      }
+    }
+
+    var note = document.getElementById('detected');
+    var name = browserName();
+    var device = isIOS ? 'iPhone или iPad' : isAndroid ? 'телефон на Android' : 'компьютер';
+    note.textContent = 'У вас ' + device + (name ? ', ' + name : '') +
+      ' — ниже то, что подходит именно вам. Инструкции для других устройств скрыты.';
+    note.hidden = false;
+
+    if (/OPR\//.test(ua)) {
+      var opera = document.getElementById('opera-note');
+      if (opera) opera.hidden = false;
+    }
+
+    apply(SHOW[path]);
+    var switcher = document.getElementById('switch');
+    switcher.hidden = false;
+    document.getElementById('show-all').addEventListener('click', function () {
+      apply(null);
+      switcher.hidden = true;
+      note.hidden = true;
+    });
+  })();
+
   (function () {
     var link = document.getElementById('bm-link');
     var copy = document.getElementById('bm-copy');

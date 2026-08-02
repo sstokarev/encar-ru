@@ -139,9 +139,19 @@ function zip(entries) {
   return Buffer.concat([...locals, centralBuf, end]);
 }
 
+// Icons are generated (scripts/build-icons.mjs) and shipped inside the
+// package: the Web Store rejects an upload whose manifest names an icon the
+// zip does not contain, and a missing size is what makes a listing look
+// amateur in the one place a paying client decides whether to trust it.
+const iconEntries = Object.values(manifest.icons ?? {}).map((path) => [
+  path,
+  readFileSync(resolve(extDir, path)),
+]);
+
 const archive = zip([
   ["manifest.json", Buffer.from(JSON.stringify(manifest, null, 2) + "\n", "utf8")],
   ["widget.js", Buffer.from(widget, "utf8")],
+  ...iconEntries,
 ]);
 
 const outFile = resolve(root, "site/encar-ru-extension.zip");
