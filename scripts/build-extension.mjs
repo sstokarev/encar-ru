@@ -143,14 +143,24 @@ function zip(entries) {
 // package: the Web Store rejects an upload whose manifest names an icon the
 // zip does not contain, and a missing size is what makes a listing look
 // amateur in the one place a paying client decides whether to trust it.
-const iconEntries = Object.values(manifest.icons ?? {}).map((path) => [
-  path,
-  readFileSync(resolve(extDir, path)),
-]);
+const iconEntries = [
+  ...new Set([
+    ...Object.values(manifest.icons ?? {}),
+    ...Object.values(manifest.action?.default_icon ?? {}),
+  ]),
+].map((path) => [path, readFileSync(resolve(extDir, path))]);
+
+// The popup carries the version so a client can read it out loud when
+// something looks wrong; substituting it here keeps one source of truth.
+const popup = readFileSync(resolve(extDir, "popup.html"), "utf8").replaceAll(
+  "{{VERSION}}",
+  manifest.version,
+);
 
 const archive = zip([
   ["manifest.json", Buffer.from(JSON.stringify(manifest, null, 2) + "\n", "utf8")],
   ["widget.js", Buffer.from(widget, "utf8")],
+  ["popup.html", Buffer.from(popup, "utf8")],
   ...iconEntries,
 ]);
 

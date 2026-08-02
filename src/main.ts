@@ -43,7 +43,7 @@ import { DEFAULT_CONFIG } from "./config.default";
 import { resolveRates, type ResolvedRates } from "./rates/cbr";
 import { applyDictionary, showTranslateHint } from "./translate/apply";
 
-const VERSION = "0.5.1";
+const VERSION = "0.6.0";
 
 interface EncarRuApi {
   version: string;

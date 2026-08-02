@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Encar по-русски — цена под ключ в РФ",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Показывает рядом с ценой на encar.com цену автомобиля под ключ в рублях и полный расчёт: пошлина, сборы, доставка.",
   "homepage_url": "https://sstokarev.github.io/encar-ru/",
   "icons": {
@@ -9,6 +9,16 @@
     "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Encar по-русски — цена под ключ в РФ",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "content_scripts": [
     {

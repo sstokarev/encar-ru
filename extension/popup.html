@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<!--
+  Toolbar popup (U13). The widget needs no controls — it runs by itself — so
+  this exists for one reason: a client must be able to see that it is installed
+  and working, and reach a human in one click. Extension pages forbid inline
+  scripts under MV3, so there is no JS here at all: static markup only.
+  {{VERSION}} is substituted by scripts/build-extension.mjs from the manifest.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Encar по-русски</title>
+<style>
+  :root{color-scheme:light}
+  body{width:260px;margin:0;font-family:system-ui,-apple-system,sans-serif;color:#181818;background:#fff}
+  .head{display:flex;align-items:center;gap:10px;padding:14px 16px 10px}
+  .mark{width:28px;height:28px;border-radius:7px;background:#D72E36;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;flex:none}
+  h1{font-size:.95rem;margin:0;line-height:1.25}
+  .status{margin:0 16px 12px;padding:8px 10px;border-radius:8px;background:#eef7ee;border:1px solid #cde3cd;font-size:.8rem;line-height:1.4;color:#245c2b}
+  .links{border-top:1px solid #F0F0F0}
+  a{display:block;padding:11px 16px;color:#181818;text-decoration:none;font-size:.85rem;border-bottom:1px solid #F0F0F0}
+  a:last-child{border-bottom:0}
+  a:hover{background:#FAFAFA}
+  a b{color:#D72E36;font-weight:600}
+  .ver{padding:9px 16px;color:#8A8A8A;font-size:.72rem}
+</style>
+</head>
+<body>
+  <div class="head">
+    <div class="mark">₽</div>
+    <h1>Цена под ключ в РФ<br>на encar.com</h1>
+  </div>
+  <p class="status">Работает автоматически: откройте encar.com — цены в рублях появятся рядом с ценами в вонах.</p>
+  <div class="links">
+    <a href="https://www.encar.com/dc/dc_carsearchlist.do?carType=for" target="_blank" rel="noopener"><b>Открыть encar.com</b> — импортные авто</a>
+    <a href="https://sstokarev.github.io/encar-ru/" target="_blank" rel="noopener">Как это работает</a>
+    <a href="https://t.me/globalcartrade" target="_blank" rel="noopener">Написать менеджеру</a>
+  </div>
+  <div class="ver">Версия {{VERSION}}</div>
+</body>
+</html>
