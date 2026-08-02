@@ -318,6 +318,24 @@ describe("DEFAULT_CONFIG: researched tariffs", () => {
   });
 });
 
+describe("the shipped order channel", () => {
+  // The address is the one product surface whose breakage is completely
+  // silent: a wrong handle opens a real Telegram screen, the client writes,
+  // and the importer never learns the order existed. It shipped as the
+  // placeholder "encar_ru_import" until the importer noticed (2026-08-02), so
+  // both copies are pinned here — the fetched file AND the embedded fallback.
+  const EXPECTED = { type: "telegram", address: "globalcartrade" };
+
+  it("is the importer's channel in the deployed config.json", () => {
+    const shipped = readSiteConfig() as Record<string, unknown>;
+    expect(shipped["messenger"]).toEqual(EXPECTED);
+  });
+
+  it("is the same channel in the embedded fallback", () => {
+    expect(DEFAULT_CONFIG.messenger).toEqual(EXPECTED);
+  });
+});
+
 describe("DEFAULT_CONFIG: cost items the importer has not priced yet", () => {
   it("dashes shipping, SBKTS/EPTS, broker and commission", () => {
     const byId = new Map(DEFAULT_CONFIG.costItems.map((i) => [i.id, i]));
@@ -331,7 +349,7 @@ describe("DEFAULT_CONFIG: cost items the importer has not priced yet", () => {
 
 describe("isValidConfig: messenger address", () => {
   const cases: Array<{ type: string; address: string; valid: boolean }> = [
-    { type: "telegram", address: "encar_ru_import", valid: true },
+    { type: "telegram", address: "globalcartrade", valid: true },
     { type: "telegram", address: "Encar123", valid: true },
     { type: "telegram", address: "@encar_ru", valid: false },
     { type: "telegram", address: "ab", valid: false },

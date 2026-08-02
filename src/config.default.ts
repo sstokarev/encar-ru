@@ -194,8 +194,12 @@ export interface WidgetConfig {
 export const DEFAULT_CONFIG: WidgetConfig = {
   version: 1,
   messenger: {
+    // The importer's real channel (t.me/globalcartrade). This embedded copy is
+    // what the "Заказать" button uses when site/config.json cannot be fetched,
+    // so it must be kept in step with it — a stale address here sends the
+    // client's order to nobody, and silently.
     type: "telegram",
-    address: "encar_ru_import",
+    address: "globalcartrade",
   },
   currency: {
     referenceRates: {
