@@ -4,10 +4,15 @@
  * Card pages (fem.encar.com detail): parameters are read in priority order
  *  1. hidden SPA state — the inline `__PRELOADED_STATE__` script carries the
  *     exact spec (`displacement`, `fuelName`, `yearMonth`) and survives
- *     browser translation (scripts are never translated);
+ *     browser translation (scripts are never translated). It is usable only
+ *     while its `vehicleId` matches the lot in the URL: fem writes the script
+ *     once and never rewrites it, so after a soft navigation it still
+ *     describes the PREVIOUS car and is discarded;
  *  2. visible spec list — `dt/dd` pairs (연식 / 연료 / 배기량);
- *  3. title heuristic — a "2.2"-style displacement in the model title yields
- *     an ESTIMATED cc (flagged, degrades precision to "approx").
+ *  3. title heuristic — a "2.2"-style displacement in the LOT TITLE yields an
+ *     ESTIMATED cc (flagged, degrades precision to "approx"). Only the title
+ *     element is read: a "4.5" from a rating widget elsewhere on the page
+ *     would silently change the duty and recycling bracket.
  *
  * Listing rows (www + fem search): only what is visible near the price is
  * used — registration "16/09식" and Korean fuel tokens from the row text,
@@ -29,9 +34,11 @@
 
 import {
   computeAgeYears,
+  isNearAgeBracket,
   type FuelType,
   type LotParams,
 } from "../calc/customs";
+import { PRICE_ELEMENT_SELECTOR } from "./scanner";
 import { originalText } from "../translate/apply";
 
 /** Raw parameters read from the DOM, before age computation. */
@@ -71,11 +78,19 @@ export function parseRegistration(
 
 /**
  * Korean fuel tokens in match-priority order: hybrid must win over its
- * base-fuel token ("가솔린 하이브리드" is a hybrid, not gasoline).
+ * base-fuel tokens. encar labels hybrids "가솔린+전기" (and prints
+ * "하이브리드" only in some model names), so the compound must be matched
+ * before the bare 전기 rule — otherwise every gasoline hybrid is read as an
+ * EV and degrades to "по запросу".
+ *
+ * The electric rule therefore only accepts a standalone 전기: not the right
+ * half of a compound ("가솔린+전기"), and not 전기형, which is a pre-facelift
+ * model marker rather than a fuel. No lookbehind — Safari support for it is
+ * too recent for a bookmarklet.
  */
 const FUEL_TOKENS: ReadonlyArray<readonly [RegExp, FuelType]> = [
-  [/하이브리드/, "hybrid"],
-  [/전기/, "electric"],
+  [/하이브리드|가솔린\s*\+\s*전기|전기\s*\+\s*가솔린/, "hybrid"],
+  [/(?:^|[^+가-힣])전기(?!형)(?!\s*\+)/, "electric"],
   [/lpg|엘피지/i, "lpg"],
   [/디젤/, "diesel"],
   [/가솔린/, "gasoline"],
@@ -89,49 +104,120 @@ export function parseFuel(text: string): FuelType | null {
   return null;
 }
 
-/** A displacement-in-liters number ("2.2") not embedded in a larger number. */
-const LITERS_RE = /(?:^|[^\d.])(\d)\.(\d)(?![\d.])/;
+/**
+ * A displacement-in-liters number ("2.2") not embedded in a larger number and
+ * not carrying a unit that rules an engine out ("4.5점" is a rating, "1.5km"
+ * a distance). The heuristic is only ever run on a lot TITLE (see
+ * lotTitleText / the listing ".dtl"), never on a text blob: a "4.5" picked up
+ * from a rating widget would silently change the duty and recycling bracket.
+ */
+const LITERS_RE =
+  /(?:^|[^\d.,])(\d)\.(\d)(?![\d.])(?!\s*(?:점|%|km|㎞|원|인승|년|월|배|kg|㎏|만))/;
+
+/** Wording that makes a N.N number a score, never a displacement. */
+const RATING_CONTEXT_RE = /평점|별점|점수|리뷰|후기|등급|평가/;
+
+/** Plausible car displacement: 0.6 L .. 6.0 L. */
+const MIN_ESTIMATED_CC = 599;
+const MAX_ESTIMATED_CC = 5999;
 
 /**
  * Estimates displacement in cc from a "2.2"-style model title: 2.2 -> 2199.
  * The -1 mirrors how nominal liters relate to real displacement (2.2 L
  * engines are 2199cc); the caller must flag the result as estimated.
+ *
+ * Returns null on anything that is not plainly an engine size — the caller
+ * then degrades to "по запросу" instead of quoting an invented bracket (R3).
  */
 export function estimateCcFromText(text: string): number | null {
+  if (RATING_CONTEXT_RE.test(text)) return null;
   const match = LITERS_RE.exec(text);
   if (!match || match[1] === undefined || match[2] === undefined) return null;
   const cc = Number(match[1]) * 1000 + Number(match[2]) * 100 - 1;
-  // Below 0.5 L it is noise (version numbers etc.), not an engine.
-  return cc >= 499 ? cc : null;
+  return cc >= MIN_ESTIMATED_CC && cc <= MAX_ESTIMATED_CC ? cc : null;
 }
 
 const STATE_YEAR_MONTH_RE = /"yearMonth":"(\d{4})(\d{2})"/;
 const STATE_DISPLACEMENT_RE = /"displacement":(\d+)/;
 const STATE_FUEL_RE = /"fuelName":"([^"]+)"/;
+/** Lot the inline state describes. */
+const STATE_VEHICLE_ID_RE = /"vehicleId"\s*:\s*"?(\d+)"?/;
+/** Lot id of a car detail URL ("/cars/detail/41756847"). */
+const DETAIL_LOT_ID_RE = /\/cars\/detail\/(\d+)/;
 
-/** Text of the inline SPA state script, if the page carries one. */
-function hiddenStateText(doc: Document): string | null {
-  for (const script of Array.from(doc.querySelectorAll("script"))) {
-    const text = script.textContent ?? "";
-    if (text.includes("__PRELOADED_STATE__")) return text;
-  }
-  return null;
+/** Lot id carried by a detail URL, or null when the URL names no lot. */
+export function lotIdFromUrl(url: string): string | null {
+  const match = DETAIL_LOT_ID_RE.exec(url);
+  return match?.[1] ?? null;
 }
 
-/** Title candidates for the cc estimation fallback (head may be absent). */
-function cardTitleText(doc: Document): string {
-  const parts: string[] = [];
-  const og = doc.querySelector('meta[property="og:title"]');
-  if (og) parts.push(og.getAttribute("content") ?? "");
-  parts.push(doc.title);
-  // Heading children are pushed individually: adjacent spans otherwise
-  // concatenate without a separator ("K7" + "2.2" -> "K72.2") and hide the
-  // displacement number from the liters pattern.
-  const headingParts = doc.querySelectorAll("h1, h2, h3, h1 *, h2 *, h3 *");
-  for (const el of Array.from(headingParts)) {
-    parts.push(el.textContent ?? "");
+/**
+ * Inline SPA state that belongs to `lotId`.
+ *
+ * fem.encar.com writes `__PRELOADED_STATE__` once, at the initial document
+ * load, and never rewrites it on a client-side route change — after a soft
+ * navigation it still describes the PREVIOUS car. Its values are only usable
+ * while the vehicle id inside it matches the lot in the URL, so every script
+ * is re-read on every pass and checked against that id. A state that names
+ * another lot (or names none at all while the URL does) is discarded.
+ *
+ * When the URL names no lot (a detached document in tests, a non-detail
+ * page) there is nothing to contradict the state and it is used as it is.
+ */
+function boundStateText(
+  doc: Document,
+  lotId: string | null,
+): { text: string | null; discarded: boolean } {
+  const texts: string[] = [];
+  for (const script of Array.from(doc.querySelectorAll("script"))) {
+    const text = script.textContent ?? "";
+    if (text.includes("__PRELOADED_STATE__")) texts.push(text);
   }
-  return parts.join(" ");
+  if (texts.length === 0) return { text: null, discarded: false };
+  if (lotId === null) {
+    return { text: texts[texts.length - 1] ?? null, discarded: false };
+  }
+  for (const text of texts) {
+    if (STATE_VEHICLE_ID_RE.exec(text)?.[1] === lotId) {
+      return { text, discarded: false };
+    }
+  }
+  return { text: null, discarded: true };
+}
+
+/**
+ * Text of the lot title element — the ONLY place a displacement may be
+ * estimated from. Preference order:
+ *  1. og:title (the site's own name for this lot, no page furniture);
+ *  2. the last heading before the lot price, i.e. the visible lot title
+ *     (the page header <h1> is "엔카" and never wins this way);
+ *  3. the document title.
+ *
+ * Heading children are read individually: adjacent spans otherwise
+ * concatenate without a separator ("K7" + "2.2" -> "K72.2") and hide the
+ * displacement from the liters pattern.
+ */
+function lotTitleText(doc: Document): string {
+  const og = doc
+    .querySelector('meta[property="og:title"]')
+    ?.getAttribute("content");
+  if (og !== null && og !== undefined && og.trim() !== "") return og;
+
+  const price = doc.querySelector(PRICE_ELEMENT_SELECTOR);
+  if (price !== null) {
+    const headings = Array.from(doc.querySelectorAll("h1, h2, h3")).filter(
+      // Node.DOCUMENT_POSITION_FOLLOWING: the price comes after the heading.
+      (heading) => (heading.compareDocumentPosition(price) & 4) !== 0,
+    );
+    const title = headings[headings.length - 1];
+    if (title !== undefined) {
+      const parts = Array.from(title.childNodes).map(
+        (child) => child.textContent ?? "",
+      );
+      return parts.join(" ");
+    }
+  }
+  return doc.title;
 }
 
 /** Parses "2,199" / "2199cc" style displacement text from a spec value. */
@@ -144,13 +230,26 @@ function parseCcText(text: string): number | null {
 
 /**
  * Extracts lot params from a car detail page. Missing fields stay undefined;
- * `estimated` is true only when the cc had to be derived from the title.
+ * `estimated` is true when the cc had to be derived from the title, or when
+ * the inline SPA state had to be discarded as belonging to another lot (the
+ * remaining values then come from the visible DOM only, so the badge must not
+ * claim exact precision).
+ *
+ * `url` binds the state to the lot on screen; it defaults to the document's
+ * own location, which is what the widget passes on every annotate pass.
  */
-export function extractCardParams(doc: Document): DomLotParams {
+export function extractCardParams(
+  doc: Document,
+  url: string = doc.defaultView?.location?.href ?? "",
+): DomLotParams {
   const params: DomLotParams = { estimated: false };
 
+  const { text: state, discarded } = boundStateText(doc, lotIdFromUrl(url));
+  // A discarded state means the page was soft-navigated: everything below is
+  // read off the visible DOM, so the result cannot claim exact precision.
+  if (discarded) params.estimated = true;
+
   // 1. Hidden SPA state: exact values, translation-proof.
-  const state = hiddenStateText(doc);
   if (state !== null) {
     const ym = STATE_YEAR_MONTH_RE.exec(state);
     if (ym && ym[1] !== undefined && ym[2] !== undefined) {
@@ -195,7 +294,7 @@ export function extractCardParams(doc: Document): DomLotParams {
 
   // 3. Title heuristic: "2.2" -> 2199cc, honestly flagged as estimated.
   if (params.engineCc === undefined) {
-    const cc = estimateCcFromText(cardTitleText(doc));
+    const cc = estimateCcFromText(lotTitleText(doc));
     if (cc !== null) {
       params.engineCc = cc;
       params.estimated = true;
@@ -296,6 +395,14 @@ export function toLotDetails(
   const details: Omit<LotParams, "priceKrw"> = { estimated: params.estimated };
   if (params.regYear !== undefined && params.regMonth !== undefined) {
     details.ageYears = computeAgeYears(params.regYear, params.regMonth, now);
+    // Only the registration MONTH is on the page, so within a couple of months
+    // of the 3y/5y duty boundary the day decides the regime: the calculator
+    // downgrades such a quote to approximate instead of claiming exactness.
+    details.ageNearBracket = isNearAgeBracket(
+      params.regYear,
+      params.regMonth,
+      now,
+    );
   }
   if (params.engineCc !== undefined) details.engineCc = params.engineCc;
   if (params.fuel !== undefined) details.fuel = params.fuel;

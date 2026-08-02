@@ -11,6 +11,17 @@
  *
  * Prices are quoted in 만원 (10,000 KRW): "1,250만원" = 12,500,000 KRW.
  * fem.encar.com exposes the exact KRW amount via data-intl-currency-amount.
+ *
+ * Lease and rent lots are rejected outright: encar renders them with the
+ * MONTHLY instalment in the very same .prc element, marked by
+ * <em class="txt_month">월</em> / <em class="txt_leaserent">리스</em> and a
+ * <span class="remain">/N개월</span> tail. Reading 66만원/month as the lot
+ * price would headline an all-in total roughly 30x below reality — the worst
+ * thing this widget can do (R3: never a confident wrong number).
+ *
+ * Scanning is incremental: `scanPrices(doc, roots)` walks only the given
+ * subtrees (the MutationObserver's added nodes), so a listing that mutates
+ * constantly is not re-walked end to end on every batch.
  */
 
 export interface PriceCandidate {
@@ -32,7 +43,8 @@ const MANWON_PER_KRW = 10_000;
  *  - [data-intl-currency-amount] — fem.encar.com car detail (exact KRW amount)
  *  - .prc / .prc_hs             — www.encar.com search listing price cells
  */
-const PRICE_ELEMENT_SELECTOR = "[data-intl-currency-amount], .prc, .prc_hs";
+export const PRICE_ELEMENT_SELECTOR =
+  "[data-intl-currency-amount], .prc, .prc_hs";
 
 const NON_CONTENT_TAGS = new Set([
   "SCRIPT",
@@ -91,37 +103,120 @@ function isAlreadyHandled(el: Element): boolean {
 }
 
 /**
- * Scans the document for KRW price sites. Pure: does not mutate the DOM.
- * Logs the zero-candidate diagnostic when the page has a body but no prices
- * were detected (distinguishes selector breakage from an empty page).
+ * Classes encar puts on the lease/rent decorations of a monthly instalment:
+ * "월" (per month), the 리스/렌트 tag and the "/N개월" remainder.
  */
-export function scanPrices(doc: Document): PriceCandidate[] {
-  const candidates: PriceCandidate[] = [];
-  const chosen: Element[] = [];
+const LEASE_ELEMENT_SELECTOR = ".txt_month, .txt_leaserent, .remain";
+/** Lease/rent wording, for markup that carries no known class. */
+const LEASE_TEXT_RE = /개월|리스|렌트/;
+/**
+ * Longest sibling text still read as part of the price group. Lease markers
+ * are tiny ("월", "리스", "/24개월"); a long sibling is body copy of the row
+ * (e.g. the seller note "1인장기렌트 이력" on a perfectly normal sale lot,
+ * which is exactly why the row as a whole is NOT a lease signal).
+ */
+const LEASE_SIBLING_MAX_LENGTH = 40;
 
-  const covered = (el: Element): boolean =>
-    chosen.some((c) => c === el || c.contains(el) || el.contains(c));
+/**
+ * True when the price group of `el` marks the amount as a monthly lease/rent
+ * instalment rather than the lot price. Scope is the price element and its
+ * immediate siblings — the container encar renders the instalment in.
+ */
+function hasLeaseSignal(el: Element): boolean {
+  if (el.matches(LEASE_ELEMENT_SELECTOR)) return true;
+  if (el.querySelector(LEASE_ELEMENT_SELECTOR) !== null) return true;
+  if (LEASE_TEXT_RE.test(el.textContent ?? "")) return true;
+
+  const parent = el.parentElement;
+  if (parent === null) return false;
+  for (const node of Array.from(parent.childNodes)) {
+    if (node === el) continue;
+    if (node.nodeType === 3) {
+      if (LEASE_TEXT_RE.test((node as Text).data)) return true;
+      continue;
+    }
+    if (node.nodeType !== 1) continue;
+    const sibling = node as Element;
+    if (sibling.matches(LEASE_ELEMENT_SELECTOR)) return true;
+    if (sibling.querySelector(LEASE_ELEMENT_SELECTOR) !== null) return true;
+    const text = (sibling.textContent ?? "").trim();
+    if (text.length <= LEASE_SIBLING_MAX_LENGTH && LEASE_TEXT_RE.test(text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Roots of a scan: the given subtrees, or the whole document body. */
+function resolveRoots(
+  doc: Document,
+  roots: readonly Element[] | undefined,
+): Element[] {
+  if (roots !== undefined) return roots.filter((root) => root.isConnected);
+  const body: Element | null = doc.body ?? doc.documentElement;
+  return body === null ? [] : [body];
+}
+
+/**
+ * Scans for KRW price sites. Pure: does not mutate the DOM.
+ *
+ * `roots` limits the walk to the given subtrees (the added nodes of a
+ * mutation batch); omit it for a full-document scan. The zero-candidate
+ * diagnostic is a full-scan concern only, and fires only when the document
+ * carries no annotated price at all — on a healthy page every later pass
+ * legitimately finds nothing new, so warning there would bury the one signal
+ * it exists for: encar changing its price markup.
+ */
+export function scanPrices(
+  doc: Document,
+  roots?: readonly Element[],
+): PriceCandidate[] {
+  const candidates: PriceCandidate[] = [];
+  // Two WeakSets instead of a linear scan over the chosen elements: `chosen`
+  // answers "is an ancestor of el already taken" via a bounded parent walk,
+  // `chosenAncestors` answers "does el contain something already taken".
+  const chosen = new WeakSet<Element>();
+  const chosenAncestors = new WeakSet<Element>();
+
+  const covered = (el: Element): boolean => {
+    if (chosen.has(el) || chosenAncestors.has(el)) return true;
+    for (let node = el.parentElement; node !== null; node = node.parentElement) {
+      if (chosen.has(node)) return true;
+    }
+    return false;
+  };
 
   const push = (el: Element, krw: number): void => {
-    chosen.push(el);
+    chosen.add(el);
+    for (let node = el.parentElement; node !== null; node = node.parentElement) {
+      chosenAncestors.add(node);
+    }
     candidates.push({ element: el, krw });
   };
 
+  const scanRoots = resolveRoots(doc, roots);
+
   // Pass 1: known price-element selectors.
-  for (const el of Array.from(doc.querySelectorAll(PRICE_ELEMENT_SELECTOR))) {
-    if (NON_CONTENT_TAGS.has(el.tagName)) continue;
-    if (isAlreadyHandled(el)) continue;
-    // Innermost element wins: td.prc_hs contains strong.prc for the same price.
-    if (el.querySelector(PRICE_ELEMENT_SELECTOR) !== null) continue;
-    if (covered(el)) continue;
-    const krw = priceFromElement(el);
-    if (krw === null) continue;
-    push(el, krw);
+  for (const root of scanRoots) {
+    const elements: Element[] = [];
+    if (root.matches(PRICE_ELEMENT_SELECTOR)) elements.push(root);
+    elements.push(...Array.from(root.querySelectorAll(PRICE_ELEMENT_SELECTOR)));
+    for (const el of elements) {
+      if (NON_CONTENT_TAGS.has(el.tagName)) continue;
+      if (isAlreadyHandled(el)) continue;
+      // Innermost element wins: td.prc_hs contains strong.prc for the same price.
+      if (el.querySelector(PRICE_ELEMENT_SELECTOR) !== null) continue;
+      if (covered(el)) continue;
+      // Monthly lease/rent instalment, not a lot price.
+      if (hasLeaseSignal(el)) continue;
+      const krw = priceFromElement(el);
+      if (krw === null) continue;
+      push(el, krw);
+    }
   }
 
   // Pass 2: regex fallback over text nodes (unknown markup).
-  const root: Element | null = doc.body ?? doc.documentElement;
-  if (root) {
+  for (const root of scanRoots) {
     const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const textNodes: Text[] = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode as Text);
@@ -152,15 +247,21 @@ export function scanPrices(doc: Document): PriceCandidate[] {
       }
 
       if (!target || covered(target) || isAlreadyHandled(target)) continue;
+      if (hasLeaseSignal(target)) continue;
       const krw = parsePriceText(target.textContent ?? "");
       if (krw === null) continue;
       push(target, krw);
     }
   }
 
-  if (candidates.length === 0 && doc.body) {
-    // Diagnostic distinguishing "no prices on the page" / selector breakage
-    // from a successful scan. Logged exactly when zero candidates are found.
+  if (
+    roots === undefined &&
+    candidates.length === 0 &&
+    doc.body &&
+    doc.querySelector(`[${ANNOTATED_ATTR}]`) === null
+  ) {
+    // Diagnostic distinguishing selector breakage from a page that simply
+    // carries no prices. Cumulative: an annotated document is a working one.
     console.warn("[encar-ru] no prices found");
   }
 

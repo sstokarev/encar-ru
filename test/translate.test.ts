@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyDictionary,
@@ -55,6 +55,7 @@ beforeEach(() => {
 afterEach(() => {
   document.body.innerHTML = "";
   localStorage.clear();
+  vi.useRealTimers();
 });
 
 describe("dictionary", () => {
@@ -233,6 +234,61 @@ describe("browser-translated pages", () => {
   });
 });
 
+describe("Safari-style in-place translation (P2)", () => {
+  /**
+   * Safari translates in place: no <font> wrappers, no lang change — the
+   * Korean text is simply replaced. Only the content itself gives it away.
+   */
+  function emulateInPlaceTranslation(root: Element): void {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+    for (const node of nodes) {
+      const parent = node.parentElement;
+      if (parent === null) continue;
+      if (["SCRIPT", "STYLE", "TEXTAREA"].includes(parent.tagName)) continue;
+      if (parent.closest('[translate="no"], .notranslate') !== null) continue;
+      node.data = node.data.replace(/[가-힣]+/g, "перевод");
+    }
+  }
+
+  it("detects translation with no font wrappers and no lang attribute", () => {
+    loadFixture(CARD_HTML);
+    expect(isBrowserTranslated(document)).toBe(false);
+
+    emulateInPlaceTranslation(document.body);
+    expect(
+      document.querySelector('font[style*="vertical-align: inherit"]'),
+    ).toBeNull();
+    expect(document.documentElement.getAttribute("lang")).toBeNull();
+
+    expect(isBrowserTranslated(document)).toBe(true);
+    expect(applyDictionary(document)).toBe(0);
+  });
+
+  it("detects it on the listing as well", () => {
+    loadFixture(LISTING_HTML);
+    emulateInPlaceTranslation(document.body);
+    expect(isBrowserTranslated(document)).toBe(true);
+  });
+
+  it("never locks itself out after its own dictionary pass", () => {
+    loadFixture(LISTING_HTML);
+    expect(applyDictionary(document)).toBeGreaterThan(0);
+    // Our own rewrites must not read as a browser translation, otherwise the
+    // dictionary would stop working on everything the SPA loads later.
+    expect(isBrowserTranslated(document)).toBe(false);
+    loadFixture(CARD_HTML);
+    expect(applyDictionary(document)).toBeGreaterThan(0);
+    expect(isBrowserTranslated(document)).toBe(false);
+  });
+
+  it("stays quiet on a page too small to judge", () => {
+    document.body.innerHTML = "<div>Цена</div><div>1 000 ₽</div>";
+    expect(isBrowserTranslated(document)).toBe(false);
+  });
+});
+
 describe("the widget's own UI", () => {
   it("is never rewritten by the dictionary", () => {
     const badge = document.createElement("span");
@@ -323,6 +379,41 @@ describe("showTranslateHint", () => {
     for (const line of [chrome, safari, other]) {
       expect(/[а-яА-Я]/.test(line)).toBe(true);
     }
+  });
+
+  it("stacks above encar's own fixed sheets", () => {
+    setUserAgent("Mozilla/5.0 (Windows NT 10.0) Chrome/126.0.0.0 Safari/537.36");
+    expect(showTranslateHint(document)).toBe(true);
+    const host = document.querySelector<HTMLElement>(`[${HINT_ATTR}]`)!;
+    // Declared inline on the host: host-page CSS outranks :host rules, and a
+    // z-index only applies to a positioned element.
+    expect(host.style.zIndex).toBe("2147483000");
+    expect(host.style.position).toBe("relative");
+    expect(
+      host.shadowRoot?.querySelector("style")?.textContent ?? "",
+    ).toContain("z-index: 2147483000");
+  });
+
+  it("stops nagging after a timeout even if its × is unreachable", () => {
+    vi.useFakeTimers();
+    setUserAgent("Mozilla/5.0 (iPhone) Version/17.5 Mobile/15E148 Safari/604.1");
+    expect(showTranslateHint(document)).toBe(true);
+
+    vi.advanceTimersByTime(12_000);
+    expect(localStorage.getItem(HINT_STORAGE_KEY)).toBe("1");
+    expect(document.querySelector(`[${HINT_ATTR}]`)).toBeNull();
+    expect(showTranslateHint(document)).toBe(false);
+  });
+
+  it("stops nagging after the first scroll", () => {
+    setUserAgent("Mozilla/5.0 (iPhone) Version/17.5 Mobile/15E148 Safari/604.1");
+    expect(showTranslateHint(document)).toBe(true);
+    expect(localStorage.getItem(HINT_STORAGE_KEY)).toBeNull();
+
+    window.dispatchEvent(new Event("scroll"));
+    expect(localStorage.getItem(HINT_STORAGE_KEY)).toBe("1");
+    // The bubble itself stays: the user may still be reading it.
+    expect(document.querySelector(`[${HINT_ATTR}]`)).not.toBeNull();
   });
 
   it("stays out of the dictionary's way", () => {

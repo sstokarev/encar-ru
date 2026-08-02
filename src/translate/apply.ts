@@ -84,16 +84,83 @@ const SENTENCE_RE = /[.!?]\s*$|니다|하세요|드려요|돼요|이에요/;
 /** Browser-translation wrapper injected by Chrome/Google Translate. */
 const TRANSLATED_FONT_SELECTOR = 'font[style*="vertical-align: inherit"]';
 
+/** Text nodes inspected by the content-based translation check. */
+const CONTENT_SAMPLE_LIMIT = 600;
+
+/**
+ * Below this many content nodes the page says nothing about its language:
+ * fixtures, bare injections and the first paint of an SPA route all look
+ * empty, and a false positive there would silence the dictionary for good.
+ */
+const CONTENT_MIN_SAMPLE = 12;
+
+/**
+ * Share of Korean content nodes below which an encar page must have been
+ * translated by something other than us. Measured on the real fixtures an
+ * untranslated page sits at 0.86-0.95, a translated one at ~0 — the threshold
+ * is deliberately far from both.
+ */
+const MIN_KOREAN_RATIO = 0.25;
+
+/** Text nodes that carry page copy (not markup, not our own UI). */
+function isContentNode(node: Text): boolean {
+  const parent = node.parentElement;
+  if (parent === null) return false;
+  if (SKIP_TAGS.has(parent.tagName)) return false;
+  if (parent.closest(SKIP_SELECTOR) !== null) return false;
+  return node.data.trim().length >= 2;
+}
+
+/**
+ * True when the sampled copy no longer reads as Korean.
+ *
+ * Safari — the product's primary platform — translates in place: no <font>
+ * wrappers, no lang change, nothing to detect but the content itself. So the
+ * page's Korean anchors are sampled and the widget stands down when they are
+ * gone.
+ *
+ * Nodes this widget rewrote count as Korean (their ORIGINAL_ATTR proves the
+ * site wrote Korean there). Without that, the dictionary would lock itself
+ * out the moment it had translated enough of the page.
+ */
+function looksTranslatedByContent(nodes: readonly Text[]): boolean {
+  let sampled = 0;
+  let korean = 0;
+  for (const node of nodes) {
+    if (!isContentNode(node)) continue;
+    sampled++;
+    if (
+      HANGUL_RE.test(node.data) ||
+      node.parentElement?.hasAttribute(ORIGINAL_ATTR) === true
+    ) {
+      korean++;
+    }
+    if (sampled >= CONTENT_SAMPLE_LIMIT) break;
+  }
+  if (sampled < CONTENT_MIN_SAMPLE) return false;
+  return korean / sampled < MIN_KOREAN_RATIO;
+}
+
 /**
  * True when the page is already machine-translated by the browser.
- * Two independent signals: the translator's <font> wrappers, and a document
- * language that is no longer Korean. An unset lang is not a signal (fixtures
- * and body-only injections have none) — only an explicit non-ko value is.
+ * Three independent signals: the translator's <font> wrappers (Chrome), a
+ * document language that is no longer Korean, and — for translators that
+ * leave neither mark, Safari's above all — the absence of Korean content.
+ * An unset lang is not a signal (fixtures and body-only injections have
+ * none) — only an explicit non-ko value is.
+ *
+ * `sample` lets the caller hand over text nodes it has already collected, so
+ * the content signal costs no extra DOM traversal. Without it the whole
+ * document is walked — fine for a one-off check, wasteful per rescan.
  */
-export function isBrowserTranslated(doc: Document): boolean {
+export function isBrowserTranslated(
+  doc: Document,
+  sample?: readonly Text[],
+): boolean {
   if (doc.querySelector(TRANSLATED_FONT_SELECTOR) !== null) return true;
   const lang = doc.documentElement?.getAttribute("lang") ?? "";
-  return lang.trim() !== "" && !/^ko\b/i.test(lang.trim());
+  if (lang.trim() !== "" && !/^ko\b/i.test(lang.trim())) return true;
+  return looksTranslatedByContent(sample ?? collectTextNodes(doc));
 }
 
 /**
@@ -194,13 +261,16 @@ function collectTextNodes(root: Document | Element): Text[] {
  * each scan without the text degrading.
  */
 export function applyDictionary(root: Document | Element): number {
+  // Collected once and reused by the translation check below: on an
+  // incremental rescan this pass must not walk anything twice.
+  const nodes = collectTextNodes(root);
   // Never fight the browser translator (KTD3).
-  if (isBrowserTranslated(resolveDoc(root))) return 0;
+  if (isBrowserTranslated(resolveDoc(root), nodes)) return 0;
 
   // Two phases: every skip decision is taken against the DOM as it was found,
   // so a node translated early in the pass cannot hide a later sibling.
   const pending: { node: Text; text: string }[] = [];
-  for (const node of collectTextNodes(root)) {
+  for (const node of nodes) {
     const raw = node.data;
     const trimmed = raw.trim();
     if (trimmed === "" || !HANGUL_RE.test(trimmed)) continue;
@@ -230,14 +300,29 @@ export function applyDictionary(root: Document | Element): number {
   return pending.length;
 }
 
+/**
+ * Same stacking level as the breakdown overlay: encar renders its own fixed
+ * bottom sheet in exactly this screen region, and a buried bubble whose × is
+ * unreachable would come back on every page load forever.
+ */
+const HINT_Z_INDEX = "2147483000";
+
+/** The bubble stops nagging by itself after this long (P2). */
+const HINT_AUTO_DISMISS_MS = 12_000;
+
 const HINT_STYLE = `
   :host {
     all: initial;
+    /* Encar's font (Pretendard) is inherited from the page. */
+    font-family: inherit;
+    position: relative;
+    z-index: ${HINT_Z_INDEX};
   }
   .box {
     position: fixed;
     left: 50%;
     bottom: 12px;
+    z-index: ${HINT_Z_INDEX};
     transform: translateX(-50%);
     box-sizing: border-box;
     width: max-content;
@@ -246,11 +331,13 @@ const HINT_STYLE = `
     align-items: flex-start;
     gap: 10px;
     padding: 12px 14px;
-    border-radius: 12px;
-    background: #14251c;
-    color: #ffffff;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
-    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    border: 1px solid #E5E5E5;
+    border-left: 3px solid #D72E36;
+    border-radius: 8px;
+    background: #FFFFFF;
+    color: #181818;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+    font-family: inherit;
     font-size: 14px;
     line-height: 1.4;
   }
@@ -259,13 +346,14 @@ const HINT_STYLE = `
   }
   .title {
     display: block;
-    font-weight: 700;
     margin-bottom: 4px;
+    color: #D72E36;
+    font-weight: 700;
   }
   .note {
     display: block;
     margin-top: 4px;
-    opacity: 0.75;
+    color: #8A8A8A;
     font-size: 13px;
   }
   button {
@@ -275,7 +363,8 @@ const HINT_STYLE = `
     margin: -8px -8px -8px 0;
     border: 0;
     background: transparent;
-    color: #ffffff;
+    color: #767676;
+    font-family: inherit;
     font-size: 20px;
     line-height: 1;
     cursor: pointer;
@@ -320,7 +409,12 @@ function writeHintFlag(win: Window | null): void {
  * Shows the one-time, dismissible hint bubble explaining how to enable full
  * page translation in the current browser. Returns true when the bubble was
  * rendered; false when it was already shown (localStorage flag) or is already
- * on screen. Dismissing writes the flag.
+ * on screen.
+ *
+ * The flag is written on dismissal — and, independently of the × button, on
+ * the first scroll or after HINT_AUTO_DISMISS_MS: the bubble sits in the same
+ * screen region as encar's own fixed sheet, so a × that ends up unreachable
+ * must still not make the bubble return on every page load (P2).
  */
 export function showTranslateHint(doc: Document = document): boolean {
   const win = doc.defaultView;
@@ -333,6 +427,10 @@ export function showTranslateHint(doc: Document = document): boolean {
   host.setAttribute(HINT_ATTR, "");
   host.setAttribute("translate", "no");
   host.className = "notranslate";
+  // Declared inline (host-page CSS outranks :host rules) and positioned,
+  // because z-index does nothing on a static element.
+  host.style.position = "relative";
+  host.style.zIndex = HINT_Z_INDEX;
 
   const shadow = host.attachShadow({ mode: "open" });
   const style = doc.createElement("style");
@@ -352,13 +450,31 @@ export function showTranslateHint(doc: Document = document): boolean {
   note.textContent = HINT_NOTE;
   text.append(title, body, note);
 
+  // Auto-dismissal: the flag is written once, by whichever signal comes
+  // first (×, first scroll, timeout). A bubble the page has already thrown
+  // away (SPA re-render) never saw the user, so its pending signals stay
+  // silent rather than marking the hint as shown.
+  let settled = false;
+  let timer: number | undefined;
+  const onScroll = (): void => settle(false);
+  function settle(remove: boolean): void {
+    if (settled) return;
+    settled = true;
+    win?.removeEventListener("scroll", onScroll, true);
+    if (timer !== undefined) win?.clearTimeout(timer);
+    if (!host.isConnected) return;
+    writeHintFlag(win);
+    if (remove) host.remove();
+  }
+  timer = win?.setTimeout(() => settle(true), HINT_AUTO_DISMISS_MS);
+  win?.addEventListener("scroll", onScroll, true);
+
   const close = doc.createElement("button");
   close.type = "button";
   close.setAttribute("aria-label", "Закрыть");
   close.textContent = "×";
   close.addEventListener("click", () => {
-    writeHintFlag(win);
-    host.remove();
+    settle(true);
   });
 
   box.append(text, close);

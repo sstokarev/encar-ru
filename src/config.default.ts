@@ -17,19 +17,43 @@ export interface MessengerConfig {
   address: string;
 }
 
-export interface CostItem {
+/**
+ * The only formula identifier the calculator recognises: it expands into the
+ * whole customs block (duty + recycling fee + clearance fee). A config may
+ * carry at most one such item — two would count customs twice.
+ */
+export const CUSTOMS_FORMULA = "customs_v1";
+
+interface CostItemBase {
   id: string;
   /** User-facing Russian label. */
   label: string;
-  kind: CostItemKind;
-  /**
-   * fixed   -> RUB amount;
-   * percent -> percent of the lot RUB price;
-   * formula -> formula identifier, computed for real in U6 (mock stage
-   *            renders an honest placeholder, KTD7).
-   */
-  value: number | string;
 }
+
+/** RUB amount added as-is. */
+export interface FixedCostItem extends CostItemBase {
+  kind: "fixed";
+  value: number;
+}
+
+/** Percent of the lot RUB price. */
+export interface PercentCostItem extends CostItemBase {
+  kind: "percent";
+  value: number;
+}
+
+/** Formula identifier (CUSTOMS_FORMULA), expanded by src/calc/customs.ts. */
+export interface FormulaCostItem extends CostItemBase {
+  kind: "formula";
+  value: string;
+}
+
+/**
+ * `kind` types `value`: a quoted number ("220000") on a fixed item is a config
+ * error, not a cost line — the calculator cannot add a string, and silently
+ * skipping it hid a whole shipping line from the total.
+ */
+export type CostItem = FixedCostItem | PercentCostItem | FormulaCostItem;
 
 /**
  * Customs tariff schema (U6, R10-R11): formulas are DATA the importer edits,

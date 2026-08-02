@@ -146,6 +146,86 @@ describe("full pipeline: scan -> dictionary -> rescan (listing)", () => {
   });
 });
 
+describe("detail page: card params belong to the main lot only", () => {
+  /** fem detail markup: the lot's own price box plus a similar-lot list. */
+  const DETAIL_HTML =
+    '<script>window.__PRELOADED_STATE__ = {"vehicleId":41756847,' +
+    '"yearMonth":"201609","displacement":2199,"fuelName":"디젤"};</script>' +
+    '<p data-intl-currency=""><span data-intl-currency-amount="6590000">659' +
+    '</span><span data-intl-currency-unit="">만원</span></p>' +
+    '<ul class="similar"><li><span class="cls">기아</span>' +
+    '<span class="dtl">2.0 디젤 프레스티지</span>' +
+    '<span class="detail">18/07식 · 디젤</span>' +
+    '<span class="prc"><strong>1,200</strong>만원</span></li></ul>';
+
+  it("gives every other price on the page its own params and no breakdown", async () => {
+    window.history.replaceState(null, "", "/cars/detail/41756847");
+    document.body.innerHTML = DETAIL_HTML;
+    init();
+    await settle();
+
+    const hosts = badgeHosts();
+    expect(hosts.length).toBe(2);
+    const main = document.querySelector<HTMLElement>(
+      "[data-intl-currency] [data-encar-ru-badge], [data-intl-currency] ~ [data-encar-ru-badge]",
+    );
+    const similar = document.querySelector<HTMLElement>(
+      ".similar [data-encar-ru-badge]",
+    );
+    expect(main).not.toBeNull();
+    expect(similar).not.toBeNull();
+
+    // The main lot has full params: an exact total, no "≈".
+    expect(badgeText(main!)).toMatch(/^\d{1,3}( \d{3})* ₽$/);
+    // The similar lot is a different car: its own row params, hence approximate.
+    expect(badgeText(similar!)).toMatch(/^≈ \d{1,3}( \d{3})* ₽$/);
+    expect(badgeText(similar!)).not.toBe(badgeText(main!));
+
+    // Only the lot of the page expands into a cost breakdown.
+    const breakdowns = document.querySelectorAll("[data-encar-ru-breakdown]");
+    expect(breakdowns.length).toBe(1);
+    expect(document.querySelector(".similar [data-encar-ru-breakdown]")).toBeNull();
+  });
+});
+
+describe("incremental rescans (performance)", () => {
+  it("walks only the mutated subtree, never the whole document again", async () => {
+    loadFixture(LISTING_HTML);
+    init();
+    await settle();
+    // Drain the batch the fixture injection itself produced.
+    await settleObserver();
+    const before = badgeHosts().length;
+    expect(before).toBeGreaterThan(0);
+
+    // Every full-page walk goes through createTreeWalker (scanner fallback
+    // pass + dictionary pass): once the page is annotated a mutation batch
+    // must never start one at the document root again.
+    const walker = vi.spyOn(document, "createTreeWalker");
+    // Wait for the initial passes to go quiet before measuring.
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      walker.mockClear();
+      await new Promise((r) => setTimeout(r, 200));
+      if (walker.mock.calls.length === 0) break;
+    }
+    walker.mockClear();
+
+    const list = document.querySelector("tbody") ?? document.body;
+    const row = document.createElement("div");
+    row.innerHTML = '<span class="prc"><strong>1,111</strong>만원</span>';
+    list.appendChild(row);
+    await settleObserver();
+
+    expect(badgeHosts().length).toBe(before + 1);
+    expect(walker).toHaveBeenCalled();
+    for (const call of walker.mock.calls) {
+      const root = call[0];
+      expect(root).not.toBe(document.body);
+      expect(root).not.toBe(document.documentElement);
+    }
+  });
+});
+
 describe("listing params survive our own translation", () => {
   it("still reads year, fuel and displacement after applyDictionary", async () => {
     loadFixture(LISTING_HTML);
@@ -234,5 +314,30 @@ describe("badge never renders a non-finite number", () => {
     expect(renderBadgeText({ totalRub: 1_687_875, precision: "exact" })).toBe(
       "1 687 875 ₽",
     );
+  });
+});
+
+describe("activation latency (U5)", () => {
+  // Runs last: it leaves the widget re-initialised on purpose.
+  it("starts the config and the CBR fetch in parallel, not chained", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: unknown) => {
+        urls.push(String(input));
+        // Neither request ever settles: chained fetches would stop at the
+        // first one and the user would wait out both timeouts (3 s + 3 s).
+        return new Promise<Response>(() => {});
+      }),
+    );
+    delete window.__encarRu;
+    document.body.innerHTML =
+      '<span class="prc"><strong>500</strong>만원</span>';
+    init();
+    await settle();
+
+    expect(urls.some((url) => url.includes("config.json"))).toBe(true);
+    expect(urls.some((url) => url.includes("cbr-xml-daily"))).toBe(true);
+    delete window.__encarRu;
   });
 });

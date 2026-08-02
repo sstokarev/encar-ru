@@ -9,6 +9,10 @@ import type { MessengerConfig } from "../config";
 /**
  * Builds the messenger deep link. The message body (lot URL + car title)
  * is percent-encoded as a single ?text= parameter.
+ *
+ * The address is encoded too: it comes from a hand-edited config, and a stray
+ * "?", "#" or "/" in it would otherwise silently rewrite the link — dropping
+ * the prefilled message, or pointing the client at a different account.
  */
 export function buildOrderLink(
   messenger: MessengerConfig,
@@ -17,9 +21,10 @@ export function buildOrderLink(
 ): string {
   const text = `Здравствуйте! Хочу заказать этот автомобиль: ${carTitle} ${pageUrl}`;
   const encoded = encodeURIComponent(text);
+  const address = encodeURIComponent(messenger.address);
   return messenger.type === "telegram"
-    ? `https://t.me/${messenger.address}?text=${encoded}`
-    : `https://wa.me/${messenger.address}?text=${encoded}`;
+    ? `https://t.me/${address}?text=${encoded}`
+    : `https://wa.me/${address}?text=${encoded}`;
 }
 
 /**

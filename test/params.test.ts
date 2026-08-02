@@ -125,6 +125,21 @@ describe("parseFuel", () => {
   it("returns null when no token is present", () => {
     expect(parseFuel("192,467km · 충남")).toBeNull();
   });
+
+  it("reads encar's hybrid label 가솔린+전기 as hybrid, not electric", () => {
+    // The listing prints hybrids as "가솔린+전기"; matching the bare 전기 rule
+    // there degrades every gasoline hybrid to "по запросу".
+    expect(parseFuel("가솔린+전기")).toBe("hybrid");
+    expect(parseFuel("· 전기+가솔린 ·")).toBe("hybrid");
+    expect(parseFuel("· 하이브리드 ·")).toBe("hybrid");
+  });
+
+  it("keeps bare 전기 electric but never matches inside a compound", () => {
+    expect(parseFuel("전기")).toBe("electric");
+    expect(parseFuel("전기차")).toBe("electric");
+    // 전기형 is a pre-facelift model marker, not a fuel.
+    expect(parseFuel("18/07식(19년형) 전기형")).toBeNull();
+  });
 });
 
 describe("estimateCcFromText", () => {
@@ -134,6 +149,19 @@ describe("estimateCcFromText", () => {
 
   it("returns null without a displacement-like number", () => {
     expect(estimateCcFromText("쏘나타 프리미엄")).toBeNull();
+  });
+
+  it("rejects ratings and implausible displacements instead of guessing", () => {
+    // A "4.5" rating must never become a 4499cc engine (different duty and
+    // recycling bracket); anything outside 0.6-6.0 L is not a car engine.
+    expect(estimateCcFromText("평점 4.5")).toBeNull();
+    expect(estimateCcFromText("4.5점")).toBeNull();
+    expect(estimateCcFromText("리뷰 4.9 (128)")).toBeNull();
+    expect(estimateCcFromText("6.5 프리미엄")).toBeNull();
+    expect(estimateCcFromText("0.5 트림")).toBeNull();
+    // Real displacements still resolve.
+    expect(estimateCcFromText("올 뉴 K7 2.2 디젤 프레스티지")).toBe(2199);
+    expect(estimateCcFromText("1.4 트렌디")).toBe(1399);
   });
 });
 
@@ -172,6 +200,113 @@ describe("card fixture params", () => {
     for (const candidate of scanPrices(doc)) {
       expect(() => extractListingParams(candidate.element)).not.toThrow();
     }
+  });
+});
+
+/** Removes the exact displacement from the inline SPA state of `root`. */
+function stripStateDisplacement(root: ParentNode): void {
+  for (const script of Array.from(root.querySelectorAll("script"))) {
+    const text = script.textContent ?? "";
+    if (text.includes("__PRELOADED_STATE__")) {
+      script.textContent = text.replace('"displacement":2199,', "");
+    }
+  }
+}
+
+/** Rewrites the dd of the visible spec list entry labelled `label`. */
+function setSpec(label: string, value: string): void {
+  for (const dt of Array.from(document.querySelectorAll("dt"))) {
+    if (!(dt.textContent ?? "").includes(label)) continue;
+    const dd = dt.nextElementSibling;
+    if (dd?.tagName === "DD") dd.textContent = value;
+    return;
+  }
+  // The fixture has no 배기량 row: add one where the spec list lives.
+  const list = document.querySelector("dl") ?? document.body;
+  const dt = document.createElement("dt");
+  dt.textContent = label;
+  const dd = document.createElement("dd");
+  dd.textContent = value;
+  list.append(dt, dd);
+}
+
+describe("card title heuristic scope (U7)", () => {
+  it("reads the cc from the lot title, not from a rating heading", () => {
+    loadFixture(CARD_HTML);
+    stripStateDisplacement(document);
+    const rating = document.createElement("h2");
+    rating.textContent = "평점 4.5";
+    document.body.prepend(rating);
+
+    const params = extractCardParams(document, DETAIL_PATH);
+    // 4.5 is a rating; the lot title says 2.2.
+    expect(params.engineCc).toBe(2199);
+    expect(params.estimated).toBe(true);
+  });
+});
+
+describe("SPA soft navigation (U7, AE1)", () => {
+  it("keeps a state bound to the lot in the URL", () => {
+    loadFixture(CARD_HTML);
+    const params = extractCardParams(document, DETAIL_PATH);
+    expect(params.engineCc).toBe(2199);
+    expect(params.fuel).toBe("diesel");
+    expect(params.estimated).toBe(false);
+  });
+
+  it("discards a state left behind by the previous lot", () => {
+    loadFixture(CARD_HTML);
+    // fem writes __PRELOADED_STATE__ once and never rewrites it on a
+    // client-side route change: after a soft navigation the script still
+    // describes lot 41756847 while the visible DOM shows the new car.
+    setSpec("연식", "20/03식");
+    setSpec("연료", "가솔린");
+    setSpec("배기량", "1,591cc");
+
+    const params = extractCardParams(document, "/cars/detail/99999999");
+    expect(params.regYear).toBe(2020);
+    expect(params.regMonth).toBe(3);
+    expect(params.fuel).toBe("gasoline");
+    expect(params.engineCc).toBe(1591);
+    // Nothing here was read from the lot's own data source.
+    expect(params.estimated).toBe(true);
+  });
+});
+
+describe("hybrid rows in the listing fixture (U7)", () => {
+  it("resolves 가솔린+전기 rows to hybrid and prices the one with a cc", async () => {
+    loadFixture(LISTING_HTML);
+    // Rows are captured before the widget runs: our own dictionary rewrites
+    // the very tokens matched here.
+    const rows = Array.from(document.querySelectorAll("tr")).filter((tr) =>
+      (tr.textContent ?? "").includes("가솔린+전기"),
+    );
+    expect(rows.length).toBe(2);
+    for (const row of rows) {
+      const priceEl = row.querySelector(".prc");
+      expect(priceEl).not.toBeNull();
+      expect(extractListingParams(priceEl!).fuel).toBe("hybrid");
+    }
+
+    // The 1.6 E-TECH row exposes a displacement in its title, so this hybrid
+    // must end up with a real all-in total; the other hybrid row has no
+    // displacement anywhere and stays honestly on request.
+    const etech = rows.find((row) =>
+      (row.querySelector(".dtl")?.textContent ?? "").includes("E-TECH"),
+    );
+    expect(etech).toBeDefined();
+
+    await runWidget();
+    for (const row of rows) {
+      const host = row.querySelector<HTMLElement>("[data-encar-ru-badge]");
+      expect(host).not.toBeNull();
+      expect(badgeText(host!)).not.toMatch(/NaN|Infinity/);
+    }
+    const etechBadge = etech!.querySelector<HTMLElement>(
+      "[data-encar-ru-badge]",
+    );
+    expect(etechBadge).not.toBeNull();
+    expect(badgeText(etechBadge!)).toMatch(/^≈ \d{1,3}( \d{3})* ₽$/);
   });
 });
 

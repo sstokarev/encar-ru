@@ -8,6 +8,7 @@ import {
   resolveRates,
   type ResolvedRates,
 } from "../src/rates/cbr";
+import { CONFIG_URL } from "../src/config";
 import { DEFAULT_CONFIG, type WidgetConfig } from "../src/config.default";
 import { attachBreakdown, BREAKDOWN_ATTR } from "../src/ui/breakdown";
 import { init } from "../src/main";
@@ -18,10 +19,12 @@ function readFixture(name: string): string {
 
 const CARD_HTML = readFixture("card-fem.html");
 
-const TEST_CONFIG_URL = "https://config.test/config.json";
 const TEST_RATES_URL = "https://rates.test/daily_json.js";
 
-/** Reference rates anchor the ±30% plausibility check (KTD2). */
+/** Fixed clock: every anchor/cache window in the module is date-based. */
+const NOW = new Date(2026, 7, 2, 12, 0, 0); // 2026-08-02
+
+/** Recently edited reference rates anchor the ±30% plausibility check (KTD2). */
 const TEST_CONFIG: WidgetConfig = {
   version: 1,
   messenger: { type: "telegram", address: "importer" },
@@ -35,6 +38,24 @@ const TEST_CONFIG: WidgetConfig = {
   customs: DEFAULT_CONFIG.customs,
   commissionNote: "Заметка.",
 };
+
+/**
+ * Same rates, but edited by hand well over a year ago: the reference is no
+ * longer evidence of what today's rate looks like, so it may not veto the
+ * mirror (the "stale anchor rejects every correct rate forever" defect).
+ */
+const STALE_ANCHOR_CONFIG: WidgetConfig = {
+  ...TEST_CONFIG,
+  currency: {
+    referenceRates: { KRW_RUB: 0.055, EUR_RUB: 90 },
+    updatedAt: "2025-01-10",
+  },
+};
+
+/** Every call passes the mirror URL explicitly — no dev globals ship (R-sec). */
+function resolve_(config: WidgetConfig): Promise<ResolvedRates> {
+  return resolveRates(config, TEST_RATES_URL);
+}
 
 /** Local calendar day, mirroring the cache-validity clock of the module. */
 function localISO(date: Date): string {
@@ -127,7 +148,10 @@ function panelOf(host: HTMLElement): HTMLElement {
 }
 
 beforeEach(() => {
-  window.__encarRuRatesUrl = TEST_RATES_URL;
+  // Only Date is faked: the module's cache/anchor windows are date-based,
+  // while the tests below still rely on real timers.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
 });
 
 afterEach(() => {
@@ -135,8 +159,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   localStorage.clear();
-  delete window.__encarRuRatesUrl;
-  delete window.__encarRuConfigUrl;
   delete window.__encarRu;
   document.body.innerHTML = "";
   window.history.replaceState(null, "", "/");
@@ -147,7 +169,7 @@ describe("resolveRates: mirror tier", () => {
     const today = localISO(new Date());
     const mock = stubRatesFetchOk(cbrPayload({ dateISO: today }));
 
-    const rates = await resolveRates(TEST_CONFIG);
+    const rates = await resolve_(TEST_CONFIG);
 
     expect(mock).toHaveBeenCalledOnce();
     expect(mock.mock.calls[0]![0]).toBe(TEST_RATES_URL);
@@ -173,19 +195,20 @@ describe("resolveRates: mirror tier", () => {
 
   it("normalizes the per-1000 KRW quote to RUB per 1 KRW", async () => {
     stubRatesFetchOk(cbrPayload({ krwValue: 66.0 }));
-    const rates = await resolveRates(TEST_CONFIG);
+    const rates = await resolve_(TEST_CONFIG);
     expect(rates.krwRub).toBeCloseTo(0.066, 10);
   });
 
   it("exposes the payload date as-is (weekend: last published rate)", async () => {
     stubRatesFetchOk(cbrPayload({ dateISO: "2026-07-31" }));
-    const rates = await resolveRates(TEST_CONFIG);
+    const rates = await resolve_(TEST_CONFIG);
     expect(rates.source).toBe("cbr");
     expect(rates.dateISO).toBe("2026-07-31");
   });
 
   it("aborts a hung mirror fetch after 3s and falls back", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(NOW);
     const mock = vi.fn(
       (_url: string, opts: { signal: AbortSignal }) =>
         new Promise((_resolve, reject) => {
@@ -197,7 +220,7 @@ describe("resolveRates: mirror tier", () => {
     vi.stubGlobal("fetch", mock);
     seedCache();
 
-    const pending = resolveRates(TEST_CONFIG);
+    const pending = resolve_(TEST_CONFIG);
     await vi.advanceTimersByTimeAsync(3000);
     const rates = await pending;
     expect(rates.source).toBe("cache");
@@ -210,7 +233,7 @@ describe("resolveRates: plausibility validation (KTD2)", () => {
     stubRatesFetchOk(cbrPayload({ krwValue: 200 }));
     seedCache({ krwRub: 0.056, dateISO: "2026-07-31" });
 
-    const rates = await resolveRates(TEST_CONFIG);
+    const rates = await resolve_(TEST_CONFIG);
     expect(rates.source).toBe("cache");
     expect(rates.krwRub).toBeCloseTo(0.056, 10);
     expect(rates.dateISO).toBe("2026-07-31");
@@ -225,8 +248,55 @@ describe("resolveRates: plausibility validation (KTD2)", () => {
   it("rejects an anomalous EUR rate and falls through to config", async () => {
     // EUR 200 vs reference 90 -> invalid; no cache -> config tier.
     stubRatesFetchOk(cbrPayload({ eurValue: 200 }));
-    const rates = await resolveRates(TEST_CONFIG);
+    const rates = await resolve_(TEST_CONFIG);
     expect(rates.source).toBe("config");
+  });
+
+  it("marks a rejected mirror response distinctly from a plain fallback", async () => {
+    stubRatesFetchOk(cbrPayload({ eurValue: 200 }));
+    expect((await resolve_(TEST_CONFIG)).rejected).toBe(true);
+
+    stubRatesFetchFail();
+    // Network down is not a rejected rate: the UI must not cry "anomaly".
+    expect((await resolve_(TEST_CONFIG)).rejected).toBeFalsy();
+
+    stubRatesFetchOk(cbrPayload());
+    expect((await resolve_(TEST_CONFIG)).rejected).toBeFalsy();
+  });
+
+  it("accepts a drifted CBR rate once the config anchor is stale", async () => {
+    // The real KRW rate has drifted to 0.09 (+64% vs the year-old constant).
+    // With the old logic every correct response was rejected forever and the
+    // client kept computing from the stale 0.055.
+    stubRatesFetchOk(cbrPayload({ krwValue: 90, eurValue: 140 }));
+    const rates = await resolve_(STALE_ANCHOR_CONFIG);
+    expect(rates.source).toBe("cbr");
+    expect(rates.krwRub).toBeCloseTo(0.09, 10);
+    expect(rates.eurRub).toBeCloseTo(140, 10);
+  });
+
+  it("still rejects absurd rates when no anchor can be trusted", async () => {
+    // 200 RUB per KRW is not a drift, it is a broken payload.
+    stubRatesFetchOk(cbrPayload({ krwValue: 200_000 }));
+    const rates = await resolve_(STALE_ANCHOR_CONFIG);
+    expect(rates.source).toBe("config");
+    expect(rates.rejected).toBe(true);
+  });
+
+  it("anchors on the last accepted live rate, not on the config constant", async () => {
+    // Live anchor 0.09 persisted 3 days ago; the config anchor is stale.
+    seedCache({
+      krwRub: 0.09,
+      eurRub: 140,
+      dateISO: "2026-07-30",
+      storedISO: localISO(new Date(NOW.getTime() - 3 * 86_400_000)),
+    });
+    // 0.055 is within the absolute range but -39% off the live anchor.
+    stubRatesFetchOk(cbrPayload({ krwValue: 55, eurValue: 140 }));
+    const rates = await resolve_(STALE_ANCHOR_CONFIG);
+    expect(rates.source).toBe("cache");
+    expect(rates.rejected).toBe(true);
+    expect(rates.krwRub).toBeCloseTo(0.09, 10);
   });
 });
 
@@ -235,7 +305,7 @@ describe("resolveRates: cache and config tiers", () => {
     stubRatesFetchFail();
     seedCache({ krwRub: 0.056, eurRub: 89, dateISO: "2026-07-31" });
 
-    const rates = await resolveRates(TEST_CONFIG);
+    const rates = await resolve_(TEST_CONFIG);
     expect(rates).toEqual({
       krwRub: 0.056,
       eurRub: 89,
@@ -244,25 +314,40 @@ describe("resolveRates: cache and config tiers", () => {
     });
   });
 
-  it("ignores a cache from a previous calendar day", async () => {
+  it("prefers a days-old cached CBR rate over the config constant", async () => {
+    // Yesterday's real rate beats a hand-edited constant (R-rates).
     stubRatesFetchFail();
-    const yesterday = localISO(new Date(Date.now() - 24 * 60 * 60 * 1000));
-    seedCache({ storedISO: yesterday });
+    const yesterday = localISO(new Date(NOW.getTime() - 86_400_000));
+    seedCache({ krwRub: 0.0575, dateISO: "2026-08-01", storedISO: yesterday });
 
-    const rates = await resolveRates(TEST_CONFIG);
-    expect(rates.source).toBe("config");
+    const rates = await resolve_(TEST_CONFIG);
+    expect(rates.source).toBe("cache");
+    expect(rates.krwRub).toBeCloseTo(0.0575, 10);
+    expect(rates.dateISO).toBe("2026-08-01");
+  });
+
+  it("keeps a cached rate usable for a bounded window only", async () => {
+    stubRatesFetchFail();
+    const sixDaysAgo = localISO(new Date(NOW.getTime() - 6 * 86_400_000));
+    seedCache({ storedISO: sixDaysAgo });
+    expect((await resolve_(TEST_CONFIG)).source).toBe("cache");
+
+    localStorage.clear();
+    const longAgo = localISO(new Date(NOW.getTime() - 40 * 86_400_000));
+    seedCache({ storedISO: longAgo });
+    expect((await resolve_(TEST_CONFIG)).source).toBe("config");
   });
 
   it("ignores a malformed cache entry", async () => {
     stubRatesFetchFail();
     localStorage.setItem(RATES_CACHE_KEY, "{not json");
-    const rates = await resolveRates(TEST_CONFIG);
+    const rates = await resolve_(TEST_CONFIG);
     expect(rates.source).toBe("config");
   });
 
   it("falls back to config reference rates with the config date", async () => {
     stubRatesFetchFail();
-    const rates = await resolveRates(TEST_CONFIG);
+    const rates = await resolve_(TEST_CONFIG);
     expect(rates).toEqual({
       krwRub: 0.055,
       eurRub: 90,
@@ -288,7 +373,7 @@ describe("breakdown rate annotations", () => {
 
   it("marks config-tier rates as preliminary after full fallback", async () => {
     stubRatesFetchFail();
-    const rates = await resolveRates(TEST_CONFIG);
+    const rates = await resolve_(TEST_CONFIG);
     expect(rates.source).toBe("config");
 
     const host = attachWithRates(rates);
@@ -317,12 +402,21 @@ describe("breakdown rate annotations", () => {
   });
 });
 
+/** Polls with real timers (the Date mock must not drive the wait). */
+async function until(check: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error("condition never became true");
+}
+
 describe("async gate: no RUB before rates resolve", () => {
   it("renders no badge value until the mirror answers", async () => {
-    window.__encarRuConfigUrl = TEST_CONFIG_URL;
     let releaseRates: (() => void) | null = null;
     const mock = vi.fn((url: string) => {
-      if (url === TEST_CONFIG_URL) {
+      // The production URLs are used: no dev override globals exist anymore.
+      if (url === CONFIG_URL) {
         return Promise.resolve(okResponse(TEST_CONFIG));
       }
       return new Promise<Response>((resolveFetch) => {
@@ -343,9 +437,9 @@ describe("async gate: no RUB before rates resolve", () => {
     expect(releaseRates).not.toBeNull();
 
     releaseRates!();
-    await vi.waitFor(() => {
-      expect(document.querySelector("[data-encar-ru-badge]")).not.toBeNull();
-    });
+    await until(
+      () => document.querySelector("[data-encar-ru-badge]") !== null,
+    );
     const badge = document.querySelector<HTMLElement>("[data-encar-ru-badge]")!;
     // The badge shows the all-in total at the resolved mirror rate:
     // lot 6,590,000 KRW * 0.0555 = 365,745 + shipping 100,000 (TEST_CONFIG

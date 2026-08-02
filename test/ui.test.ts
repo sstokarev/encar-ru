@@ -85,6 +85,17 @@ function toggleOf(host: HTMLElement): HTMLButtonElement {
   return btn;
 }
 
+/** Headline value rendered inside the merged detail control. */
+function toggleValue(host: HTMLElement): string {
+  return (
+    shadowOf(host).querySelector("[data-toggle-value]")?.textContent ?? ""
+  );
+}
+
+function styleOf(host: HTMLElement): string {
+  return shadowOf(host).querySelector("style")?.textContent ?? "";
+}
+
 function closeOf(host: HTMLElement): HTMLButtonElement {
   const btn = shadowOf(host).querySelector<HTMLButtonElement>("[data-close]");
   if (!btn) throw new Error("close button not found");
@@ -145,7 +156,6 @@ function attachDirect(
 }
 
 beforeEach(() => {
-  window.__encarRuConfigUrl = TEST_CONFIG_URL;
   window.history.replaceState(null, "", DETAIL_PATH);
 });
 
@@ -154,7 +164,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   localStorage.clear();
-  delete window.__encarRuConfigUrl;
   delete window.__encarRu;
   document.body.innerHTML = "";
   document.title = "";
@@ -164,7 +173,7 @@ afterEach(() => {
 describe("loadConfig", () => {
   it("returns the remote config with source 'remote' on success", async () => {
     const mock = stubFetchOk(REMOTE_CONFIG);
-    const loaded = await loadConfig();
+    const loaded = await loadConfig(TEST_CONFIG_URL);
     expect(mock).toHaveBeenCalledOnce();
     expect(mock.mock.calls[0]![0]).toBe(TEST_CONFIG_URL);
     expect(loaded.source).toBe("remote");
@@ -173,14 +182,14 @@ describe("loadConfig", () => {
 
   it("falls back to embedded defaults when fetch fails", async () => {
     stubFetchFail();
-    const loaded = await loadConfig();
+    const loaded = await loadConfig(TEST_CONFIG_URL);
     expect(loaded.source).toBe("embedded");
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
   });
 
   it("falls back to embedded defaults on malformed payload", async () => {
     stubFetchOk({ nonsense: true } as unknown as WidgetConfig);
-    const loaded = await loadConfig();
+    const loaded = await loadConfig(TEST_CONFIG_URL);
     expect(loaded.source).toBe("embedded");
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
   });
@@ -188,7 +197,7 @@ describe("loadConfig", () => {
   it("falls back to embedded defaults when the customs section is missing", async () => {
     const { customs: _customs, ...withoutCustoms } = REMOTE_CONFIG;
     stubFetchOk(withoutCustoms as unknown as WidgetConfig);
-    const loaded = await loadConfig();
+    const loaded = await loadConfig(TEST_CONFIG_URL);
     expect(loaded.source).toBe("embedded");
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
   });
@@ -205,7 +214,7 @@ describe("loadConfig", () => {
     );
     vi.stubGlobal("fetch", mock);
 
-    const pending = loadConfig();
+    const pending = loadConfig(TEST_CONFIG_URL);
     await vi.advanceTimersByTimeAsync(3000);
     const loaded = await pending;
     expect(loaded.source).toBe("embedded");
@@ -334,7 +343,11 @@ describe("breakdown panel", () => {
     expect(host.getAttribute("translate")).toBe("no");
     expect(host.classList.contains("notranslate")).toBe(true);
 
-    const el = host.parentElement!;
+    // The control is a block row of its own now, so idempotency is keyed on
+    // the price element it annotates, not on DOM proximity.
+    const el = document.querySelector<HTMLElement>(
+      `[data-intl-currency-amount="${KRW}"]`,
+    )!;
     attachBreakdown(
       { element: el, krw: KRW },
       { config: CLEAN_CONFIG, source: "remote" },
@@ -451,10 +464,6 @@ describe("badge placement (U8)", () => {
     // Nothing of ours sits inside the price element or between it and the
     // unit: the host page's own price line is untouched.
     expect(price.querySelector("[data-encar-ru-host]")).toBeNull();
-
-    const badge = badgeHosts()[0]!;
-    expect(unit.nextElementSibling).toBe(badge);
-    expect(badge.nextElementSibling).toBe(breakdownHost());
   });
 
   it("badge hosts are nowrap inline-blocks that never split a price", async () => {
@@ -486,6 +495,144 @@ describe("badge placement (U8)", () => {
     expect(css).toContain("font-size: max(11px, 0.9em)");
     expect(css).toContain("white-space: nowrap");
     expect(css).toContain("vertical-align: middle");
+  });
+
+  it("renders the listing chip in encar's design language", () => {
+    const el = document.createElement("span");
+    document.body.appendChild(el);
+    attachBadge(
+      { element: el, krw: 10_000_000 },
+      { totalRub: 1_145_469, precision: "exact" },
+    );
+    const css = badgeHosts()[0]!.shadowRoot?.querySelector("style")
+      ?.textContent ?? "";
+    // Encar tokens: inherited Pretendard, red accent, 1px separators.
+    expect(css).toContain("font-family: inherit");
+    expect(css).toContain("#D72E36");
+    // The rejected dark-green visual language is gone for good.
+    expect(css).not.toContain("#1a6b3c");
+  });
+});
+
+describe("detail-page control (layout + encar styling)", () => {
+  async function initCard(): Promise<HTMLElement> {
+    stubFetchOk(REMOTE_CONFIG);
+    loadFixture(CARD_HTML);
+    init();
+    await vi.waitFor(() => {
+      expect(breakdownHost()).not.toBeNull();
+    });
+    return breakdownHost()!;
+  }
+
+  it("inserts its own block-level row under the price block, not inside it", async () => {
+    const host = await initCard();
+    const price = document.querySelector<HTMLElement>(
+      "[data-intl-currency-amount]",
+    )!;
+
+    // Never inside the site's fixed-height price line.
+    expect(price.closest("[data-intl-currency]")!.contains(host)).toBe(false);
+    // A full-width row that follows the block holding the price, so the
+    // site's own tab row below reflows instead of being overlapped.
+    expect(host.previousElementSibling?.contains(price)).toBe(true);
+    expect(host.nextElementSibling).not.toBeNull();
+    expect(host.style.display).toBe("block");
+    expect(host.style.width).toBe("100%");
+    expect(host.style.whiteSpace).toBe("normal");
+    expect(host.style.float).toBe("none");
+  });
+
+  it("merges the value and the expand affordance into one control", async () => {
+    const host = await initCard();
+    const badge = badgeHosts()[0]!;
+    // The inline badge is absorbed: exactly one visible control remains.
+    expect(badge.style.display).toBe("none");
+    const toggle = toggleOf(host);
+    expect(toggleValue(host)).toBe(
+      badge.shadowRoot?.querySelector("span")?.textContent,
+    );
+    expect(toggleValue(host)).toBe("429 500 ₽");
+    // No second "Расчёт" pill next to the number.
+    expect(toggle.textContent).not.toContain("Расчёт");
+    expect(toggle.querySelector("[data-chevron]")).not.toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    toggle.click();
+    expect(panelOf(host).hidden).toBe(false);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("styles control and panel with encar's tokens", async () => {
+    const host = await initCard();
+    const css = styleOf(host);
+    expect(css).toContain("font-family: inherit");
+    expect(css).toContain("#D72E36");
+    expect(css).toContain("border-radius: 8px");
+    expect(css).not.toContain("#1a6b3c");
+
+    const button = css.slice(css.indexOf("[data-order-button]"));
+    expect(button).toContain("min-height: 50px");
+    expect(button).toContain("font-size: 15px");
+    expect(button).toContain("font-weight: 600");
+    expect(button).toContain("background: #D72E36");
+  });
+});
+
+describe("provenance signal (P1)", () => {
+  /** Attaches a badge to a fresh element and returns its host. */
+  function attach(provenance?: unknown): HTMLElement {
+    const el = document.createElement("span");
+    document.body.appendChild(el);
+    (attachBadge as unknown as (...args: unknown[]) => void)(
+      { element: el, krw: 6_590_000 },
+      { totalRub: 1_701_437, precision: "approx" },
+      provenance,
+    );
+    const hosts = badgeHosts();
+    return hosts[hosts.length - 1]!;
+  }
+
+  it("marks a badge built on embedded config and config-tier FX", () => {
+    const host = attach({ configSource: "embedded", ratesSource: "config" });
+    expect(host.hasAttribute("data-degraded")).toBe(true);
+    const title = host.getAttribute("title") ?? "";
+    expect(title).toContain("встроенные тарифы");
+    expect(title).toContain("курс");
+    expect(host.shadowRoot?.querySelector("[data-degraded]")?.textContent).toBe(
+      "~",
+    );
+    // The value the rest of the widget reads stays exactly the total.
+    expect(host.shadowRoot?.querySelector("span")?.textContent).toBe(
+      "≈ 1 701 437 ₽",
+    );
+  });
+
+  it("marks cache-tier FX as degraded as well", () => {
+    const host = attach({ configSource: "remote", ratesSource: "cache" });
+    expect(host.hasAttribute("data-degraded")).toBe(true);
+    expect(host.getAttribute("title") ?? "").toContain("курс");
+  });
+
+  it("stays unmarked for fresh config + CBR rates, and without provenance", () => {
+    const fresh = attach({ configSource: "remote", ratesSource: "cbr" });
+    expect(fresh.hasAttribute("data-degraded")).toBe(false);
+    expect(fresh.getAttribute("title")).toBeNull();
+
+    const unknown = attach();
+    expect(unknown.hasAttribute("data-degraded")).toBe(false);
+    expect(unknown.getAttribute("title")).toBeNull();
+  });
+
+  it("marks the detail control when the config is embedded", () => {
+    const embedded = attachDirect(REMOTE_CONFIG, 10_000_000, "embedded");
+    const toggle = toggleOf(embedded);
+    expect(toggle.querySelector("[data-degraded]")?.textContent).toBe("~");
+    expect(toggle.getAttribute("title") ?? "").toContain("встроенные тарифы");
+    embedded.remove();
+
+    const remote = attachDirect(REMOTE_CONFIG, 10_000_000, "remote");
+    expect(toggleOf(remote).querySelector("[data-degraded]")).toBeNull();
   });
 });
 
@@ -530,6 +677,21 @@ describe("order button deep links", () => {
       `https://t.me/encar_importer?text=${encodeURIComponent(TEXT)}`,
     );
     expect(link).toContain("http%3A%2F%2Flocalhost%2Fcars%2Fdetail%2F41756847");
+  });
+
+  it("percent-encodes the messenger address (P3)", () => {
+    // A hand-edited config with a stray ?/#/ must not rewrite the link.
+    const link = buildOrderLink(
+      { type: "telegram", address: "importer?bad#x/y" },
+      URL_IN_TEST,
+      TITLE,
+    );
+    expect(link).toBe(
+      `https://t.me/importer%3Fbad%23x%2Fy?text=${encodeURIComponent(TEXT)}`,
+    );
+    // Exactly one query string, and it is ours.
+    expect(link.indexOf("?")).toBe(link.indexOf("?text="));
+    expect(link).not.toContain("#x");
   });
 
   it("builds a whatsapp deep link with a percent-encoded lot URL", () => {

@@ -17,9 +17,17 @@
  * U9: after every scan pass the ko->ru dictionary is applied to the page
  * (src/translate/apply.ts), and the one-time browser-translation hint is
  * shown once prices have actually been found.
+ *
+ * Activation must feel immediate: the config fetch and the CBR fetch are
+ * started together at init, not chained (they used to cost up to 3 + 3 s
+ * before anything appeared on screen).
+ *
+ * Rescans are incremental: the observer hands over the subtrees that changed
+ * and only those are scanned and translated — encar listings mutate all the
+ * time, and re-walking the whole document each batch cost ~370 ms at 413 lots.
  */
 
-import { scanPrices } from "./scan/scanner";
+import { PRICE_ELEMENT_SELECTOR, scanPrices } from "./scan/scanner";
 import { observeDom } from "./scan/observer";
 import {
   extractCardParams,
@@ -29,7 +37,8 @@ import {
 import { computeAllIn } from "./calc/customs";
 import { attachBadge } from "./ui/badge";
 import { attachBreakdown, isDetailPage } from "./ui/breakdown";
-import { loadConfig, type LoadedConfig } from "./config";
+import { loadConfig, type LoadedConfig, type WidgetConfig } from "./config";
+import { DEFAULT_CONFIG } from "./config.default";
 import { resolveRates, type ResolvedRates } from "./rates/cbr";
 import { applyDictionary, showTranslateHint } from "./translate/apply";
 
@@ -46,6 +55,31 @@ declare global {
   }
 }
 
+/** True when two configs anchor the FX plausibility check identically. */
+function sameReferenceRates(a: WidgetConfig, b: WidgetConfig): boolean {
+  return (
+    a.currency.referenceRates.KRW_RUB === b.currency.referenceRates.KRW_RUB &&
+    a.currency.referenceRates.EUR_RUB === b.currency.referenceRates.EUR_RUB
+  );
+}
+
+/**
+ * The price element of the lot the detail page is about. Every other price on
+ * such a page (market value block, similar lots, sold lots) belongs to a
+ * DIFFERENT car and must be read from its own row.
+ */
+function mainLotPriceElement(doc: Document): Element | null {
+  // fem marks the lot's own price box with the exact KRW amount; otherwise
+  // the first price of the page is the lot's own (market value, similar and
+  // sold lots all render below it). Innermost element wins, mirroring the
+  // scanner, so the result can be compared with a scanned candidate.
+  const price =
+    doc.querySelector("[data-intl-currency-amount]") ??
+    doc.querySelector(PRICE_ELEMENT_SELECTOR);
+  if (price === null) return null;
+  return price.querySelector(PRICE_ELEMENT_SELECTOR) ?? price;
+}
+
 export function init(): void {
   const existing = window.__encarRu;
   if (existing) {
@@ -54,34 +88,50 @@ export function init(): void {
     return;
   }
 
-  // Config and rates are each resolved once and shared by all rescans.
-  let configPromise: Promise<LoadedConfig> | null = null;
-  const getConfig = (): Promise<LoadedConfig> => {
-    if (configPromise === null) configPromise = loadConfig();
-    return configPromise;
-  };
-  // Rates need the config first: its reference rates anchor the ±30%
-  // plausibility check (KTD2).
-  let ratesPromise: Promise<ResolvedRates> | null = null;
-  const getRates = (): Promise<ResolvedRates> => {
-    if (ratesPromise === null) {
-      ratesPromise = getConfig().then((loaded) => resolveRates(loaded.config));
-    }
-    return ratesPromise;
-  };
+  // Config and rates are resolved once and shared by all rescans — and both
+  // network calls start NOW, in parallel. The rates only need the config's
+  // reference rates for the ±30% plausibility check (KTD2), so they are
+  // resolved against the embedded anchors immediately; should the remote
+  // config bring different anchors, they are re-resolved against those (rare,
+  // and the CBR response is warm by then).
+  const configPromise = loadConfig();
+  const embeddedRatesPromise = resolveRates(DEFAULT_CONFIG);
+  const ratesPromise: Promise<ResolvedRates> = configPromise.then((loaded) =>
+    sameReferenceRates(loaded.config, DEFAULT_CONFIG)
+      ? embeddedRatesPromise
+      : resolveRates(loaded.config),
+  );
 
-  const annotate = async (): Promise<void> => {
-    const loaded = await getConfig();
-    // U5 gate: nothing is rendered until the rates resolve.
-    const rates = await getRates();
+  const annotate = async (roots?: readonly Element[]): Promise<void> => {
+    // U5 gate: nothing is rendered until config AND rates have resolved.
+    const [loaded, rates]: [LoadedConfig, ResolvedRates] = await Promise.all([
+      configPromise,
+      ratesPromise,
+    ]);
     const detail = isDetailPage(window.location.href);
-    // Card params describe the single lot of the page; listing params are
-    // re-read per price element from its own row (U7).
-    const cardLot = detail ? toLotDetails(extractCardParams(document)) : null;
-    const candidates = scanPrices(document);
+    const candidates =
+      roots === undefined ? scanPrices(document) : scanPrices(document, roots);
+
+    // Card params describe the single lot of the page and apply to its price
+    // element only; every other price is another lot and is read from its own
+    // row (U7). The state is re-read on each pass: fem never rewrites it on a
+    // soft navigation, so it has to be re-bound to the lot in the URL.
+    const mainPriceEl = detail ? mainLotPriceElement(document) : null;
+    const mainCandidate =
+      mainPriceEl === null
+        ? undefined
+        : candidates.find((c) => c.element === mainPriceEl);
+    const cardLot =
+      mainCandidate === undefined
+        ? null
+        : toLotDetails(extractCardParams(document, window.location.href));
+
     for (const candidate of candidates) {
+      const isMainLot = candidate === mainCandidate;
       const lot =
-        cardLot ?? toLotDetails(extractListingParams(candidate.element));
+        isMainLot && cardLot !== null
+          ? cardLot
+          : toLotDetails(extractListingParams(candidate.element));
       // The badge headlines the all-in ("под ключ") total, not the converted
       // lot price (R1). computeAllIn is pure and cheap, and config/rates are
       // resolved once above, so a per-candidate call costs nothing; the
@@ -92,15 +142,27 @@ export function init(): void {
         rates,
         loaded.config,
       );
-      attachBadge(candidate, allIn);
-      if (detail) {
-        // U2: on the car screen the badge expands into the cost breakdown.
+      // P1: a badge computed from embedded tariffs or a non-CBR rate must not
+      // look identical to a fresh one — the provenance drives the "~" marker.
+      attachBadge(candidate, allIn, {
+        configSource: loaded.source,
+        ratesSource: rates.source,
+      });
+      if (isMainLot) {
+        // U2: on the car screen the lot's own badge expands into the cost
+        // breakdown. Similar/sold lots get a badge and nothing else.
         attachBreakdown(candidate, loaded, rates, lot);
       }
     }
+
     // U9: the dictionary runs after the scan, so prices are already annotated
-    // (and therefore off limits) by the time any text is rewritten.
-    applyDictionary(document);
+    // (and therefore off limits) by the time any text is rewritten. It follows
+    // the scan scope: an incremental pass translates only what was added.
+    if (roots === undefined) {
+      applyDictionary(document);
+    } else {
+      for (const root of roots) applyDictionary(root);
+    }
     if (candidates.length > 0) {
       // One-time hint about full-page browser translation (R12).
       showTranslateHint(document);
@@ -116,7 +178,11 @@ export function init(): void {
   const start = (): void => {
     rescan();
     // Observe the Document node itself so a replaced <body> stays covered.
-    observeDom(document, rescan);
+    // Only the changed subtrees are rescanned; a full walk stays reserved for
+    // the initial pass and for an explicit rescan() from the API.
+    observeDom(document, (roots) => {
+      void annotate(roots);
+    });
   };
 
   if (document.body) {

@@ -15,12 +15,18 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AGE_BRACKET_NOTE,
   computeAgeYears,
   computeAllIn,
+  isNearAgeBracket,
   type AllInResult,
   type LotParams,
 } from "../src/calc/customs";
-import type { CustomsConfig, WidgetConfig } from "../src/config.default";
+import type {
+  CostItem,
+  CustomsConfig,
+  WidgetConfig,
+} from "../src/config.default";
 
 const TEST_CUSTOMS: CustomsConfig = {
   asOf: "2026-08",
@@ -117,17 +123,73 @@ function itemRub(result: AllInResult, id: string): number {
 describe("computeAgeYears", () => {
   const NOW = new Date(2026, 7, 1); // 2026-08-01
 
-  it("counts full years from the registration month", () => {
-    // 2023-08 -> 2026-08: the third anniversary month is reached => 3 years.
-    expect(computeAgeYears(2023, 8, NOW)).toBe(3);
-    // 2023-09 -> 2026-08: one month short of the anniversary => 2 years.
+  it("counts the anniversary from the END of the registration month", () => {
+    // The DOM gives year+month only. A car registered 2023-08-31 is NOT yet
+    // three years old on 2026-08-01, so the anniversary month itself may not
+    // buy the cheaper 3-5y regime: 2 years until the month has fully passed.
+    expect(computeAgeYears(2023, 8, NOW)).toBe(2);
+    // One month later the whole anniversary month is behind us => 3 years.
+    expect(computeAgeYears(2023, 8, new Date(2026, 8, 1))).toBe(3);
+    // 2023-09 -> 2026-08: still short of the anniversary => 2 years.
     expect(computeAgeYears(2023, 9, NOW)).toBe(2);
-    expect(computeAgeYears(2020, 8, NOW)).toBe(6);
+    expect(computeAgeYears(2020, 7, NOW)).toBe(6);
+    expect(computeAgeYears(2020, 8, NOW)).toBe(5);
     expect(computeAgeYears(2026, 1, NOW)).toBe(0);
   });
 
   it("never returns a negative age", () => {
     expect(computeAgeYears(2027, 1, NOW)).toBe(0);
+  });
+});
+
+describe("age near a duty bracket boundary", () => {
+  const NOW = new Date(2026, 7, 1); // 2026-08-01
+
+  it("flags registrations within ~2 months of the 3y and 5y cliffs", () => {
+    // 2023-08 -> 35 full months: one month short of the 3y regime change.
+    expect(isNearAgeBracket(2023, 8, NOW)).toBe(true);
+    // 2023-06 -> 37 months, 2023-10 -> 33 months: inside / outside the window.
+    expect(isNearAgeBracket(2023, 6, NOW)).toBe(true);
+    expect(isNearAgeBracket(2023, 10, NOW)).toBe(false);
+    // 5y cliff: 2021-08 -> 59 months.
+    expect(isNearAgeBracket(2021, 8, NOW)).toBe(true);
+    expect(isNearAgeBracket(2021, 4, NOW)).toBe(false);
+    // Nowhere near a boundary.
+    expect(isNearAgeBracket(2016, 9, NOW)).toBe(false);
+  });
+
+  it("quotes the <3y regime for a lot registered in the 3y anniversary month", () => {
+    // 20,000,000 KRW, 2000cc, registered 2023-08, valued at 2026-08-01.
+    // <3y: max(48% * 10,000 EUR, 3.5 * 2000) = 7,000 EUR = 700,000 RUB.
+    // 3-5y would be 2.7 * 2000 = 5,400 EUR = 540,000 RUB — the cheaper
+    // bracket we cannot prove, so it must NOT be the one quoted.
+    const ageYears = computeAgeYears(2023, 8, NOW);
+    const result = compute({
+      priceKrw: 20_000_000,
+      ageYears,
+      engineCc: 2000,
+      fuel: "gasoline",
+      ageNearBracket: isNearAgeBracket(2023, 8, NOW),
+    });
+    expect(itemRub(result, "duty")).toBe(700_000);
+  });
+
+  it("degrades an exact lot to approx with a Russian note near a boundary", () => {
+    const lot: LotParams = {
+      priceKrw: 20_000_000,
+      ageYears: 2,
+      engineCc: 2000,
+      fuel: "gasoline",
+    };
+    const plain = compute(lot);
+    expect(plain.precision).toBe("exact");
+    expect(plain.notes).toEqual([]);
+
+    const near = compute({ ...lot, ageNearBracket: true });
+    expect(near.precision).toBe("approx");
+    expect(near.notes).toContain(AGE_BRACKET_NOTE);
+    // Same money, only the confidence changes.
+    expect(near.totalRub).toBe(plain.totalRub);
   });
 });
 
@@ -319,7 +381,9 @@ describe("all-in total", () => {
     const tenPct: WidgetConfig = {
       ...CONFIG,
       costItems: CONFIG.costItems.map((item) =>
-        item.id === "commission" ? { ...item, value: 10 } : item,
+        item.kind === "percent" && item.id === "commission"
+          ? { ...item, value: 10 }
+          : item,
       ),
     };
     const lot: LotParams = {
@@ -332,6 +396,57 @@ describe("all-in total", () => {
     const raised = compute(lot, tenPct);
     // lotRub 1,000,000: 5% -> 50,000, 10% -> 100,000.
     expect(raised.totalRub - base.totalRub).toBe(50_000);
+  });
+});
+
+describe("cost items the calculator cannot handle", () => {
+  const LOT: LotParams = {
+    priceKrw: 20_000_000,
+    ageYears: 2,
+    engineCc: 2000,
+    fuel: "gasoline",
+  };
+
+  function withItems(items: CostItem[]): WidgetConfig {
+    return { ...CONFIG, costItems: items };
+  }
+
+  it("does not silently drop a fixed item whose value is a quoted number", () => {
+    // A hand-edited config with "220000" instead of 220000: the shipping line
+    // used to vanish and the total was 220,000 RUB too low, silently.
+    const quoted = withItems([
+      {
+        id: "shipping",
+        label: "Доставка Корея — Владивосток",
+        kind: "fixed",
+        value: "220000",
+      } as unknown as CostItem,
+    ]);
+    const result = compute(LOT, quoted);
+    expect(result.items.some((item) => item.id === "shipping")).toBe(false);
+    expect(result.precision).toBe("onRequest");
+  });
+
+  it("treats an unknown formula identifier as not computable", () => {
+    const unknown = withItems([
+      { id: "customs", label: "Таможенные платежи", kind: "formula", value: "customs_v2" },
+    ]);
+    const result = compute(LOT, unknown);
+    expect(result.items.some((item) => item.id === "duty")).toBe(false);
+    expect(result.precision).toBe("onRequest");
+  });
+
+  it("expands the customs block once even with a duplicated formula item", () => {
+    const doubled = withItems([
+      { id: "customs", label: "Таможенные платежи", kind: "formula", value: "customs_v1" },
+      { id: "customs2", label: "Таможенные платежи 2", kind: "formula", value: "customs_v1" },
+    ]);
+    const result = compute(LOT, doubled);
+    const ids = result.items.map((item) => item.id);
+    expect(ids.filter((id) => id === "duty").length).toBe(1);
+    expect(ids.filter((id) => id === "recycling").length).toBe(1);
+    // The second (unusable) item must be visible as a degradation, not hidden.
+    expect(result.precision).toBe("onRequest");
   });
 });
 

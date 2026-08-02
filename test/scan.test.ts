@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { parsePriceText } from "../src/scan/scanner";
+import { parsePriceText, scanPrices } from "../src/scan/scanner";
+import { observeDom } from "../src/scan/observer";
 import { extractCardParams, toLotDetails } from "../src/scan/params";
 import { computeAllIn } from "../src/calc/customs";
 import { DEFAULT_CONFIG } from "../src/config.default";
@@ -241,5 +242,122 @@ describe("zero-price diagnostic", () => {
     await settle();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith("[encar-ru] no prices found");
+  });
+
+  it("stays silent while rescanning a page whose prices are annotated", async () => {
+    // A healthy page yields zero NEW candidates on every later pass (everything
+    // is annotated already). Warning there would drown the one signal the
+    // diagnostic exists for: encar changing its price markup.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    document.body.innerHTML =
+      '<span class="prc"><strong>500</strong>만원</span>';
+    await runWidget();
+    expect(badgeHosts().length).toBe(1);
+
+    window.__encarRu?.rescan();
+    await settle();
+    window.__encarRu?.rescan();
+    await settle();
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("lease and rent lots (U1)", () => {
+  // Markup exactly as encar's own listing template renders it — see the doT
+  // sources in test/fixtures/listing-desktop.html, where lease/rent lots wrap
+  // the MONTHLY instalment with <em class="txt_month">월</em> and
+  // <span class="remain">/N개월</span> inside the same price container.
+  const RENT_PHOTO_AD =
+    '<li class="ad"><span class="cls"><strong>기아</strong><em>스포티지</em></span>' +
+    '<span class="dtl"><strong>2.0 디젤</strong></span>' +
+    '<span class="detail"><span class="yer">23/09식</span>' +
+    '<span class="ipt">디젤</span></span>' +
+    '<span class="val"><em class="txt_leaserent">렌트</em>' +
+    '<em class="txt_month">월</em>' +
+    '<span class="prc"><strong>66</strong>만원' +
+    '<span class="remain">/24개월</span></span></span></li>';
+  const LEASE_TABLE_ROW =
+    '<table><tbody><tr><td class="inf">' +
+    '<span class="dtl">2.2 디젤 프레스티지</span> 16/09식 · 디젤</td>' +
+    '<td class="prc_hs"><em class="txt_month">월</em>' +
+    '<strong class="prc">66</strong>만원' +
+    '<span class="remain">/36개월</span></td></tr></tbody></table>';
+  const SALE_TABLE_ROW =
+    '<table><tbody><tr><td class="inf">' +
+    '<span class="dtl">2.2 디젤 프레스티지</span> 16/09식 · 디젤</td>' +
+    '<td class="prc_hs"><strong class="prc">1,830</strong>만원</td>' +
+    "</tr></tbody></table>";
+
+  it("finds no price on a rent photo ad or a lease table row", () => {
+    document.body.innerHTML = RENT_PHOTO_AD + LEASE_TABLE_ROW;
+    // 66만원 is a monthly instalment, not the lot price: quoting it would
+    // headline an all-in total ~30x below reality.
+    expect(scanPrices(document)).toEqual([]);
+  });
+
+  it("badges no lease/rent row and still badges the sale row beside it", async () => {
+    document.body.innerHTML = RENT_PHOTO_AD + LEASE_TABLE_ROW + SALE_TABLE_ROW;
+    await runWidget();
+    const hosts = badgeHosts();
+    expect(hosts.length).toBe(1);
+    expect(hosts[0]!.closest("td")?.textContent).toContain("1,830");
+  });
+});
+
+describe("incremental scanning", () => {
+  it("scans only the roots it is given", () => {
+    document.body.innerHTML =
+      '<div id="a"><span class="prc"><strong>500</strong>만원</span></div>' +
+      '<div id="b"><span class="prc"><strong>900</strong>만원</span></div>';
+    const a = document.getElementById("a")!;
+    expect(scanPrices(document, [a]).map((c) => c.krw)).toEqual([5_000_000]);
+    expect(scanPrices(document).map((c) => c.krw)).toEqual([
+      5_000_000, 9_000_000,
+    ]);
+  });
+
+  it("accepts a price element itself as a root", () => {
+    document.body.innerHTML =
+      '<div id="a"><span class="prc"><strong>500</strong>만원</span></div>';
+    const price = document.querySelector<HTMLElement>(".prc")!;
+    expect(scanPrices(document, [price]).map((c) => c.krw)).toEqual([
+      5_000_000,
+    ]);
+  });
+});
+
+describe("mutation observer scope", () => {
+  it("ignores the widget's own hosts and reports the added roots", async () => {
+    const seen: Element[][] = [];
+    const observer = observeDom(
+      document.body,
+      (roots) => {
+        seen.push(roots);
+      },
+      10,
+    );
+
+    for (const attr of [
+      "data-encar-ru-badge",
+      "data-encar-ru-breakdown",
+      "data-encar-ru-host",
+      "data-encar-ru-hint",
+    ]) {
+      const host = document.createElement("span");
+      host.setAttribute(attr, "");
+      document.body.appendChild(host);
+    }
+    await new Promise((r) => setTimeout(r, 60));
+    // Our own UI must never wake the scanner up.
+    expect(seen).toEqual([]);
+
+    const row = document.createElement("div");
+    row.textContent = "새 매물";
+    document.body.appendChild(row);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(seen.length).toBe(1);
+    expect(seen[0]!.length).toBe(1);
+    expect(seen[0]![0]).toBe(row);
+    observer.disconnect();
   });
 });

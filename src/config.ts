@@ -6,6 +6,7 @@
  */
 
 import {
+  CUSTOMS_FORMULA,
   DEFAULT_CONFIG,
   type CostItem,
   type WidgetConfig,
@@ -18,8 +19,11 @@ export type {
   CustomsConfig,
   DutyPerCcBracket,
   DutyValueTier,
+  FixedCostItem,
+  FormulaCostItem,
   MessengerConfig,
   MessengerType,
+  PercentCostItem,
   RecyclingFeeConfig,
   WidgetConfig,
 } from "./config.default";
@@ -36,34 +40,73 @@ export interface LoadedConfig {
   source: ConfigSource;
 }
 
-declare global {
-  interface Window {
-    /** Test/dev override for the remote config URL. */
-    __encarRuConfigUrl?: string;
-  }
-}
-
+/**
+ * Cost item shape. `kind` types `value`: a fixed/percent item MUST carry a
+ * number and a formula item a string. The old "number or string either way"
+ * check let a quoted "220000" through, and the calculator then dropped the
+ * line without a trace (the total was short by exactly that amount).
+ */
 function isCostItem(value: unknown): value is CostItem {
   if (typeof value !== "object" || value === null) return false;
   const item = value as Record<string, unknown>;
-  return (
-    typeof item["id"] === "string" &&
-    typeof item["label"] === "string" &&
-    (item["kind"] === "fixed" ||
-      item["kind"] === "percent" ||
-      item["kind"] === "formula") &&
-    (typeof item["value"] === "number" || typeof item["value"] === "string")
-  );
+  if (typeof item["id"] !== "string" || typeof item["label"] !== "string") {
+    return false;
+  }
+  switch (item["kind"]) {
+    case "fixed":
+    case "percent":
+      return isFiniteNumber(item["value"]);
+    case "formula":
+      return typeof item["value"] === "string";
+    default:
+      return false;
+  }
+}
+
+/** True for a recognised customs formula item (at most one per config). */
+function isCustomsFormulaItem(item: CostItem): boolean {
+  return item.kind === "formula" && item.value === CUSTOMS_FORMULA;
 }
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+/** Finite and strictly positive — the only shape an FX rate may have. */
+function isPositiveNumber(value: unknown): value is number {
+  return isFiniteNumber(value) && value > 0;
+}
+
+/** Telegram username (no @, no query string) — it lands in a deep link. */
+const TELEGRAM_ADDRESS_RE = /^[A-Za-z0-9_]{3,64}$/;
+/** WhatsApp phone number, digits with an optional leading plus. */
+const WHATSAPP_ADDRESS_RE = /^\+?\d{6,15}$/;
+
+/**
+ * Messenger shape validation: the address is interpolated into the "Заказать"
+ * deep link, so anything but a plain username / phone number is rejected here
+ * rather than encoded away at the use site.
+ */
+function isValidMessenger(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const messenger = value as Record<string, unknown>;
+  const address = messenger["address"];
+  if (typeof address !== "string") return false;
+  if (messenger["type"] === "telegram") {
+    return TELEGRAM_ADDRESS_RE.test(address);
+  }
+  if (messenger["type"] === "whatsapp") {
+    return WHATSAPP_ADDRESS_RE.test(address);
+  }
+  return false;
+}
+
 /**
  * Validates an ascending bracket array: every entry passes `isEntry`, every
- * entry but the last carries a finite upper bound under `maxKey`, and the
- * last entry is open-ended (no bound) so bracket lookup always resolves.
+ * entry but the last carries a finite upper bound under `maxKey`, the bounds
+ * strictly increase (the lookup returns the FIRST admitting bracket, so a
+ * reordered array silently quotes the wrong tier), and the last entry is
+ * open-ended (no bound) so bracket lookup always resolves.
  */
 function isBracketArray(
   value: unknown,
@@ -71,12 +114,18 @@ function isBracketArray(
   isEntry: (entry: Record<string, unknown>) => boolean,
 ): boolean {
   if (!Array.isArray(value) || value.length === 0) return false;
+  let previous = Number.NEGATIVE_INFINITY;
   return value.every((raw, index) => {
     if (typeof raw !== "object" || raw === null) return false;
     const entry = raw as Record<string, unknown>;
     const last = index === value.length - 1;
     const bound = entry[maxKey];
-    if (last ? bound !== undefined : !isFiniteNumber(bound)) return false;
+    if (last) {
+      if (bound !== undefined) return false;
+    } else {
+      if (!isFiniteNumber(bound) || bound <= previous) return false;
+      previous = bound;
+    }
     return isEntry(entry);
   });
 }
@@ -127,41 +176,52 @@ function isCustomsConfig(value: unknown): boolean {
   );
 }
 
-/** Structural validation: a malformed remote payload must not reach the UI. */
-function isValidConfig(value: unknown): value is WidgetConfig {
+/**
+ * Structural validation: a malformed remote payload must not reach the UI.
+ * Exported so the deployed site/config.json can be checked against exactly
+ * this function in CI (test/config-file.test.ts) instead of only at runtime,
+ * where a typo silently downgrades every client to the embedded tariffs.
+ */
+export function isValidConfig(value: unknown): value is WidgetConfig {
   if (typeof value !== "object" || value === null) return false;
   const cfg = value as Record<string, unknown>;
-  const messenger = cfg["messenger"] as Record<string, unknown> | undefined;
   const currency = cfg["currency"] as Record<string, unknown> | undefined;
   const rates = currency?.["referenceRates"] as
     | Record<string, unknown>
     | undefined;
+  const costItems = cfg["costItems"];
   return (
     typeof cfg["version"] === "number" &&
-    typeof messenger === "object" &&
-    messenger !== null &&
-    (messenger["type"] === "telegram" || messenger["type"] === "whatsapp") &&
-    typeof messenger["address"] === "string" &&
-    messenger["address"].length > 0 &&
+    isValidMessenger(cfg["messenger"]) &&
     typeof rates === "object" &&
     rates !== null &&
-    typeof rates["KRW_RUB"] === "number" &&
-    rates["KRW_RUB"] > 0 &&
-    typeof rates["EUR_RUB"] === "number" &&
+    // Both rates divide or multiply money: zero or negative yields
+    // Infinity/NaN or a negative duty, never an honest price.
+    isPositiveNumber(rates["KRW_RUB"]) &&
+    isPositiveNumber(rates["EUR_RUB"]) &&
     typeof currency?.["updatedAt"] === "string" &&
-    Array.isArray(cfg["costItems"]) &&
-    cfg["costItems"].every(isCostItem) &&
+    Array.isArray(costItems) &&
+    costItems.every(isCostItem) &&
+    // Two customs formula items would add duty, recycling and clearance twice.
+    (costItems as CostItem[]).filter(isCustomsFormulaItem).length <= 1 &&
     isCustomsConfig(cfg["customs"]) &&
     typeof cfg["commissionNote"] === "string"
   );
 }
 
 /**
- * Loads the importer config. Never rejects: any failure path resolves to the
- * embedded default with source "embedded".
+ * Loads the importer config from `url` (the deployed config by default).
+ * Never rejects: any failure path resolves to the embedded default with
+ * source "embedded".
+ *
+ * The URL is a parameter rather than a window global on purpose: a global
+ * override shipped in the bundle would let any co-tenant script on encar.com
+ * (ads, analytics) swap the config and with it every displayed price and the
+ * "Заказать" deep link.
  */
-export async function loadConfig(): Promise<LoadedConfig> {
-  const url = window.__encarRuConfigUrl ?? CONFIG_URL;
+export async function loadConfig(
+  url: string = CONFIG_URL,
+): Promise<LoadedConfig> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {

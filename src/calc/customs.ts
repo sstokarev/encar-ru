@@ -10,7 +10,10 @@
  *  - Duty, age <3y: percent of the customs value (EUR) with a EUR/cc minimum,
  *    tier chosen by customs value (dutyValueTiers).
  *  - Duty, ages 3-5 inclusive / >5: flat EUR per cc (dutyPerCcByAge.y3 /
- *    .y5plus). Customs age = full years from first registration to now.
+ *    .y5plus). Customs age = full years from first registration to now,
+ *    counted from the END of the registration month because the DOM never
+ *    gives the day (computeAgeYears); near a regime boundary the quote is
+ *    additionally demoted to "approx" with AGE_BRACKET_NOTE.
  *  - Recycling fee: fixed RUB by displacement class and age (recyclingFee).
  *  - Clearance fee: RUB bracket by lot customs value (clearanceFeeBrackets).
  *
@@ -26,11 +29,12 @@
  * "по запросу" (R3).
  */
 
-import type {
-  CustomsConfig,
-  DutyPerCcBracket,
-  DutyValueTier,
-  WidgetConfig,
+import {
+  CUSTOMS_FORMULA,
+  type CustomsConfig,
+  type DutyPerCcBracket,
+  type DutyValueTier,
+  type WidgetConfig,
 } from "../config.default";
 
 export type FuelType = "gasoline" | "diesel" | "lpg" | "hybrid" | "electric";
@@ -47,6 +51,13 @@ export interface LotParams {
    * estimated from a "2.2" model title, U7) rather than read as data.
    */
   estimated?: boolean;
+  /**
+   * True when the registration date sits within a couple of months of a duty
+   * bracket boundary (see isNearAgeBracket): the unknown registration DAY can
+   * then still move the lot into another duty regime, so the quote is marked
+   * approximate and carries AGE_BRACKET_NOTE.
+   */
+  ageNearBracket?: boolean;
 }
 
 export interface FxRates {
@@ -78,6 +89,8 @@ export interface AllInResult {
   /** Sum of listed items; under "onRequest" it covers known items only. */
   totalRub: number;
   precision: Precision;
+  /** User-facing Russian notes for the breakdown (may be empty). */
+  notes: string[];
 }
 
 /**
@@ -119,18 +132,61 @@ export function lotPrecision(lot: Omit<LotParams, "priceKrw">): Precision {
 }
 
 /**
+ * Full months from the first registration (year, month 1-12) to `now`.
+ *
+ * The DOM gives year and month only — the registration DAY is genuinely
+ * unknown — so the car is treated as registered on the LAST day of its
+ * registration month: an anniversary counts only once the whole anniversary
+ * month has passed. At the 3-year cliff that is the conservative reading:
+ * "2023-08, valued on 2026-08-01" could be 2023-08-31 (not yet 3 years), and
+ * the 3-5y flat EUR/cc regime is far cheaper than the <3y percent-of-value
+ * one — a bracket the widget cannot prove must never be the one quoted.
+ * May be negative for a future registration date.
+ */
+function ageMonths(regYear: number, regMonth: number, now: Date): number {
+  return (
+    (now.getFullYear() - regYear) * 12 + (now.getMonth() + 1 - regMonth) - 1
+  );
+}
+
+/**
  * Customs age in full years from the first registration (year, month 1-12)
- * to `now`. The registration day is unknown, so the anniversary is counted
- * as reached at the start of the month. Never negative.
+ * to `now`, counted from the END of the registration month (see ageMonths).
+ * Never negative.
  */
 export function computeAgeYears(
   regYear: number,
   regMonth: number,
   now: Date = new Date(),
 ): number {
-  let years = now.getFullYear() - regYear;
-  if (now.getMonth() + 1 < regMonth) years -= 1;
-  return Math.max(0, years);
+  const months = ageMonths(regYear, regMonth, now);
+  return months <= 0 ? 0 : Math.floor(months / 12);
+}
+
+/** Duty regime boundaries in months (3 and 5 years). */
+const AGE_BRACKET_MONTHS = [36, 60] as const;
+
+/** How close to a boundary the unknown registration day still matters. */
+const AGE_BRACKET_MARGIN_MONTHS = 2;
+
+/** Shown when the age sits close enough to a boundary to change the regime. */
+export const AGE_BRACKET_NOTE =
+  "Возраст близок к границе таможенного режима (3 и 5 лет): точная дата регистрации может изменить размер пошлины.";
+
+/**
+ * True when the lot age is within AGE_BRACKET_MARGIN_MONTHS of a duty regime
+ * boundary. Only the registration month is known, so around the boundary the
+ * quote cannot be called exact whichever side it lands on.
+ */
+export function isNearAgeBracket(
+  regYear: number,
+  regMonth: number,
+  now: Date = new Date(),
+): boolean {
+  const months = ageMonths(regYear, regMonth, now);
+  return AGE_BRACKET_MONTHS.some(
+    (boundary) => Math.abs(months - boundary) <= AGE_BRACKET_MARGIN_MONTHS,
+  );
 }
 
 /**
@@ -233,16 +289,42 @@ export function computeAllIn(
     items.push({ id: "lot", label: "Цена лота", rub: lotRub });
   }
 
+  // A cost item the calculator cannot turn into a line must not just vanish:
+  // an omitted item is a total that is short by exactly that item, with
+  // nothing looking broken. Any such item demotes the quote to "on request".
+  let unhandled = false;
+  let customsExpanded = false;
+
   for (const item of config.costItems) {
-    if (item.kind === "fixed" && isAmount(item.value)) {
-      items.push({ id: item.id, label: item.label, rub: Math.round(item.value) });
-    } else if (item.kind === "percent" && priceKnown && isAmount(item.value)) {
-      items.push({
-        id: item.id,
-        label: item.label,
-        rub: Math.round((lotRub * item.value) / 100),
-      });
-    } else if (item.kind === "formula" && canComputeCustoms) {
+    if (item.kind === "fixed") {
+      if (isAmount(item.value)) {
+        items.push({
+          id: item.id,
+          label: item.label,
+          rub: Math.round(item.value),
+        });
+      } else {
+        unhandled = true;
+      }
+    } else if (item.kind === "percent") {
+      if (priceKnown && isAmount(item.value)) {
+        items.push({
+          id: item.id,
+          label: item.label,
+          rub: Math.round((lotRub * item.value) / 100),
+        });
+      } else {
+        unhandled = true;
+      }
+    } else if (
+      // Dispatch on the identifier, and expand the customs block at most once:
+      // a second recognised formula item would count duty, the recycling fee
+      // and the clearance fee twice (the validator rejects such configs).
+      item.value === CUSTOMS_FORMULA &&
+      canComputeCustoms &&
+      !customsExpanded
+    ) {
+      customsExpanded = true;
       // canComputeCustoms narrows ageYears/engineCc to numbers.
       const ageYears = lot.ageYears as number;
       const engineCc = lot.engineCc as number;
@@ -263,9 +345,11 @@ export function computeAllIn(
         label: customs.labels.clearance,
         rub: Math.round(computeClearanceRub(lotRub, customs)),
       });
+    } else {
+      // Unknown formula identifier, a duplicate customs item, or customs that
+      // are not computable for this lot (EV / missing params).
+      unhandled = true;
     }
-    // Formula items that cannot be computed are omitted: under "onRequest"
-    // only known items are listed (honest degradation, KTD7 spirit).
   }
 
   // Last line of defence (the "≈ NaN ₽" guard): a single non-finite line would
@@ -274,10 +358,17 @@ export function computeAllIn(
   const usable = items.filter((item) => Number.isFinite(item.rub));
   const summed = usable.reduce((sum, item) => sum + item.rub, 0);
   const totalRub = Number.isFinite(summed) ? summed : 0;
-  const degraded = usable.length !== items.length || !Number.isFinite(summed);
-  return {
-    items: usable,
-    totalRub,
-    precision: degraded ? "onRequest" : precision,
-  };
+  const degraded =
+    unhandled || usable.length !== items.length || !Number.isFinite(summed);
+
+  // Close to a duty bracket boundary the unknown registration day can still
+  // move the lot into another regime: honest "approx" plus a visible reason.
+  const notes: string[] = [];
+  let finalPrecision: Precision = degraded ? "onRequest" : precision;
+  if (customsExpanded && lot.ageNearBracket === true) {
+    notes.push(AGE_BRACKET_NOTE);
+    if (finalPrecision === "exact") finalPrecision = "approx";
+  }
+
+  return { items: usable, totalRub, precision: finalPrecision, notes };
 }
