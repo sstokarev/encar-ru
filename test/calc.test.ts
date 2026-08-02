@@ -537,6 +537,32 @@ describe("all-in total", () => {
   });
 });
 
+describe("host page that replaced Array.prototype.reduce (encar polyfill)", () => {
+  it("still totals the quote instead of refusing every lot", () => {
+    // Measured live on www.encar.com (2026-08-02): its ES5 bundle replaces
+    // Array.prototype.reduce with an implementation that ignores the callback
+    // and returns the array — `[1,2,3].reduce((s,x)=>s+x,0)` yielded [1,2,3].
+    // The total then failed Number.isFinite, so every quote degraded and the
+    // entire desktop listing read "по запросу". Globals belong to the host
+    // page; only syntax (for-of) is ours.
+    const original = Array.prototype.reduce;
+    let result: AllInResult;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (Array.prototype as any).reduce = function (this: unknown[]) {
+        return this;
+      };
+      result = compute(FULL_LOT);
+    } finally {
+      Array.prototype.reduce = original;
+    }
+    expect(result.precision).toBe("exact");
+    expect(Number.isFinite(result.totalRub)).toBe(true);
+    // Same number as the untouched run: lot + duty + recycling + clearance.
+    expect(result.totalRub).toBe(compute(FULL_LOT).totalRub);
+  });
+});
+
 describe("cost items the calculator cannot handle", () => {
   function withItems(items: CostItem[]): WidgetConfig {
     return { ...CONFIG, costItems: items };

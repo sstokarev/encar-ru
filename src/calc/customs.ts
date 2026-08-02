@@ -589,13 +589,24 @@ export function computeAllIn(
   // Last line of defence (the "≈ NaN ₽" guard): a single non-finite line would
   // poison the total, so unusable lines are dropped and the quote is demoted to
   // "on request". The returned total is finite by construction.
-  const usable = items.filter(
-    (item) => isUnknownLine(item) || Number.isFinite(item.rub),
-  );
-  const summed = usable.reduce(
-    (sum, item) => (isUnknownLine(item) ? sum : sum + item.rub),
-    0,
-  );
+  // Filtering and summing are done with a plain loop ON PURPOSE. www.encar.com
+  // loads an ES5 bundle that REPLACES built-ins, and its Array.prototype.reduce
+  // ignores the callback and returns the array itself (measured live
+  // 2026-08-02: `[1,2,3].reduce((s,x)=>s+x,0)` yielded `[1,2,3]`). The total
+  // then failed Number.isFinite, every quote degraded, and the whole desktop
+  // listing read "по запросу" — the honest marker, for a dishonest reason.
+  // A for-of loop is syntax: the host page cannot replace it.
+  const usable: CostLine[] = [];
+  let summed = 0;
+  for (const item of items) {
+    if (isUnknownLine(item)) {
+      usable.push(item);
+      continue;
+    }
+    if (!Number.isFinite(item.rub)) continue;
+    usable.push(item);
+    summed += item.rub;
+  }
   const totalRub = Number.isFinite(summed) ? summed : 0;
   // Refusal beats a floor. An unusable price leaves nothing to bound the total
   // from below (and a config without a customs item would otherwise report the
