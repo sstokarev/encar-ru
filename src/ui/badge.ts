@@ -159,9 +159,16 @@ export type BadgeTotal = Pick<AllInResult, "totalRub" | "precision">;
  * when computed from estimated params, and the honest "по запросу" when the
  * customs items are not computable — an "onRequest" total covers known items
  * only, so rendering it would understate the price (U6/U7, R3).
+ *
+ * A non-finite total can only be an upstream bug (the calculator refuses to
+ * produce one), and "≈ NaN ₽" is the worst thing a price badge can say: it is
+ * rendered as the honest marker instead. Belt and braces on purpose — this is
+ * the last code that touches the number before the client reads it.
  */
 export function badgeText(allIn: BadgeTotal): string {
-  if (allIn.precision === "onRequest") return ON_REQUEST_TEXT;
+  if (allIn.precision === "onRequest" || !Number.isFinite(allIn.totalRub)) {
+    return ON_REQUEST_TEXT;
+  }
   return formatRub(allIn.totalRub, allIn.precision !== "exact");
 }
 

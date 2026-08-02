@@ -96,6 +96,32 @@ export function isBrowserTranslated(doc: Document): boolean {
   return lang.trim() !== "" && !/^ko\b/i.test(lang.trim());
 }
 
+/**
+ * Text of `root` as the SITE wrote it: its current text plus every
+ * pre-translation original this widget preserved under ORIGINAL_ATTR.
+ *
+ * Anything that parses Korean out of the page (src/scan/params.ts) must read
+ * this and never plain textContent: the dictionary rewrites the very tokens
+ * those parsers match ("16/09식" -> "16/09 г.в.", "디젤" -> "дизель"), so a
+ * rescan of an already translated row would otherwise find nothing.
+ *
+ * Originals are appended, not substituted: the result is a superset of the
+ * subtree text, which is all a token/regex scan needs, and it stays correct
+ * when only part of a subtree was rewritten. When the browser's own translator
+ * rewrote the page there are no preserved originals — the caller then sees
+ * unparseable text and must degrade honestly rather than guess.
+ */
+export function originalText(root: Element): string {
+  const text = root.textContent ?? "";
+  const own = root.getAttribute(ORIGINAL_ATTR);
+  const rewritten = Array.from(root.querySelectorAll(`[${ORIGINAL_ATTR}]`));
+  if (own === null && rewritten.length === 0) return text;
+  const parts = [text];
+  if (own !== null) parts.push(own);
+  for (const el of rewritten) parts.push(el.getAttribute(ORIGINAL_ATTR) ?? "");
+  return parts.join(" ");
+}
+
 /** Applies the numeric-suffix rules ("16/09식" -> "16/09 г.в."). */
 function applySuffixRules(text: string): string {
   let out = text;

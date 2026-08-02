@@ -15,6 +15,14 @@
  * estimated, so listing badges never claim exact precision (KTD6 alignment:
  * the same row walk works for desktop tables, photo ads and list items).
  *
+ * Row text is read through `originalText` (src/translate/apply.ts), never
+ * through plain textContent: our own ko->ru dictionary runs after each scan
+ * and rewrites exactly the tokens matched here ("16/09식" -> "16/09 г.в.",
+ * "디젤" -> "дизель"), so a rescan of an already translated page would
+ * otherwise parse nothing. A row measured once is additionally marked and
+ * cached (ROW_ATTR + rowParamsCache), so a price cell re-rendered by the site
+ * inside an already translated row still gets the pre-translation reading.
+ *
  * Anything unparseable simply stays undefined: precision degrades to
  * "approx"/"onRequest" downstream instead of throwing (R3 degradation).
  */
@@ -24,6 +32,7 @@ import {
   type FuelType,
   type LotParams,
 } from "../calc/customs";
+import { originalText } from "../translate/apply";
 
 /** Raw parameters read from the DOM, before age computation. */
 export interface DomLotParams {
@@ -197,16 +206,32 @@ export function extractCardParams(doc: Document): DomLotParams {
 }
 
 /**
+ * Marker on a listing row whose params have already been read from
+ * untranslated text. It lets a later pass recognise the same row even after
+ * every Korean token in it was rewritten. Deliberately NOT one of
+ * applyDictionary's skip markers (see SKIP_SELECTOR): rows must stay
+ * translatable.
+ */
+const ROW_ATTR = "data-encar-ru-row";
+
+/** Pre-translation reading of a row, kept for rescans of that same row. */
+const rowParamsCache = new WeakMap<Element, DomLotParams>();
+
+/**
  * Smallest ancestor of the price element that contains exactly one
  * registration date — the "row" of this lot. Works for desktop table rows
  * (tr), photo-ad cards and drencar list items alike. An ancestor with
  * several registrations means the walk overshot into a multi-lot container:
  * give up rather than read another lot's params.
+ *
+ * A row we already measured stays the row whatever its text reads now, so a
+ * price element re-rendered by the site into a translated row still resolves.
  */
 function findListingRow(priceEl: Element): Element | null {
   let node: Element | null = priceEl;
   for (let depth = 0; node !== null && depth < 12; depth += 1) {
-    const matches = (node.textContent ?? "").match(REG_GLOBAL_RE);
+    if (node.hasAttribute(ROW_ATTR)) return node;
+    const matches = originalText(node).match(REG_GLOBAL_RE);
     if (matches !== null) return matches.length === 1 ? node : null;
     node = node.parentElement;
   }
@@ -223,7 +248,8 @@ export function extractListingParams(priceEl: Element): DomLotParams {
   const row = findListingRow(priceEl);
   if (row === null) return params;
 
-  const text = row.textContent ?? "";
+  // Read what the site wrote, not what this widget rewrote (U9 vs U7).
+  const text = originalText(row);
   const reg = parseRegistration(text);
   if (reg !== null) {
     params.regYear = reg.year;
@@ -240,10 +266,22 @@ export function extractListingParams(priceEl: Element): DomLotParams {
   // and dealer notes, and a "1.6" picked out of those would silently drive
   // the badge total. No title element -> no displacement (R3 degradation).
   const titleEl = row.querySelector(".dtl") ?? row.querySelector(".cls");
-  const title = titleEl?.textContent ?? "";
+  const title = titleEl === null ? "" : originalText(titleEl);
   const cc = estimateCcFromText(title);
   if (cc !== null) params.engineCc = cc;
 
+  if (params.regYear === undefined) {
+    // Nothing parseable left — e.g. the browser's own translator rewrote the
+    // row, which leaves no originals behind. Reuse the pre-translation
+    // reading if this row ever had one; otherwise degrade honestly (the
+    // caller turns missing params into "по запросу"), never guess.
+    const cached = rowParamsCache.get(row);
+    return cached === undefined ? params : { ...cached };
+  }
+
+  // Freshly parsed from untranslated text: remember it for later passes.
+  row.setAttribute(ROW_ATTR, "");
+  rowParamsCache.set(row, params);
   return params;
 }
 

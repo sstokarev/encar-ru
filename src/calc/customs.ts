@@ -17,6 +17,13 @@
  * EV (and any lot without a usable displacement or age) degrades honestly:
  * precision "onRequest" — only computable items are listed and the UI shows
  * "расчёт по запросу" instead of a total.
+ *
+ * Garbage in never becomes a confident number out. Any non-finite or
+ * nonsensical input (NaN/Infinity, a non-positive price or FX rate, a negative
+ * age, a non-positive displacement) counts as MISSING, not as data, and the
+ * produced total is re-checked for finiteness before it is returned. A
+ * confidently wrong number is worse for the client than an honest
+ * "по запросу" (R3).
  */
 
 import type {
@@ -74,16 +81,39 @@ export interface AllInResult {
 }
 
 /**
+ * Finite and strictly positive — the only shape a money amount, an FX rate or
+ * a displacement may have. NaN/Infinity are treated as missing data, never as
+ * a value to compute with.
+ */
+function isPositive(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+/** Finite and not negative — a brand-new car legitimately has age 0. */
+function isAge(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/**
+ * Finite config amount. Unlike a price it may be zero (a waived fee) or
+ * negative (a discount line) — it only may not be NaN/Infinity, and it is
+ * never a formula identifier string.
+ */
+function isAmount(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/**
  * Precision the given lot params can support (U7, R3):
  * customs not computable (missing age/cc or an EV) -> "onRequest";
  * computable from estimated params -> "approx"; otherwise "exact".
+ *
+ * "Missing" covers unusable numbers too: a half-parsed row that yields NaN
+ * must degrade exactly like a row that yielded nothing.
  */
 export function lotPrecision(lot: Omit<LotParams, "priceKrw">): Precision {
   const computable =
-    lot.fuel !== "electric" &&
-    lot.ageYears !== undefined &&
-    lot.engineCc !== undefined &&
-    lot.engineCc > 0;
+    lot.fuel !== "electric" && isAge(lot.ageYears) && isPositive(lot.engineCc);
   if (!computable) return "onRequest";
   return lot.estimated === true ? "approx" : "exact";
 }
@@ -181,22 +211,32 @@ export function computeAllIn(
   rates: FxRates,
   config: WidgetConfig,
 ): AllInResult {
-  const lotRub = Math.round(lot.priceKrw * rates.krwRub);
+  // Every price-derived item depends on these three numbers: if any of them is
+  // unusable, the lot price itself is unknown and the whole quote degrades to
+  // "on request" rather than propagating a NaN through every line.
+  const priceKnown =
+    isPositive(lot.priceKrw) &&
+    isPositive(rates.krwRub) &&
+    isPositive(rates.eurRub);
+  const lotRub = priceKnown ? Math.round(lot.priceKrw * rates.krwRub) : 0;
   // Unrounded customs value in EUR for the <3y percent tiers.
-  const lotEur = (lot.priceKrw * rates.krwRub) / rates.eurRub;
+  const lotEur = priceKnown ? (lot.priceKrw * rates.krwRub) / rates.eurRub : 0;
   const customs = config.customs;
 
   // Customs formulas need an age and a positive displacement; EVs follow
   // different rules entirely and are quoted manually (plan decision).
-  const precision = lotPrecision(lot);
+  const precision = priceKnown ? lotPrecision(lot) : "onRequest";
   const canComputeCustoms = precision !== "onRequest";
 
-  const items: CostLine[] = [{ id: "lot", label: "Цена лота", rub: lotRub }];
+  const items: CostLine[] = [];
+  if (priceKnown) {
+    items.push({ id: "lot", label: "Цена лота", rub: lotRub });
+  }
 
   for (const item of config.costItems) {
-    if (item.kind === "fixed" && typeof item.value === "number") {
+    if (item.kind === "fixed" && isAmount(item.value)) {
       items.push({ id: item.id, label: item.label, rub: Math.round(item.value) });
-    } else if (item.kind === "percent" && typeof item.value === "number") {
+    } else if (item.kind === "percent" && priceKnown && isAmount(item.value)) {
       items.push({
         id: item.id,
         label: item.label,
@@ -228,6 +268,16 @@ export function computeAllIn(
     // only known items are listed (honest degradation, KTD7 spirit).
   }
 
-  const totalRub = items.reduce((sum, item) => sum + item.rub, 0);
-  return { items, totalRub, precision };
+  // Last line of defence (the "≈ NaN ₽" guard): a single non-finite line would
+  // poison the total, so unusable lines are dropped and the quote is demoted to
+  // "on request". The returned total is finite by construction.
+  const usable = items.filter((item) => Number.isFinite(item.rub));
+  const summed = usable.reduce((sum, item) => sum + item.rub, 0);
+  const totalRub = Number.isFinite(summed) ? summed : 0;
+  const degraded = usable.length !== items.length || !Number.isFinite(summed);
+  return {
+    items: usable,
+    totalRub,
+    precision: degraded ? "onRequest" : precision,
+  };
 }
