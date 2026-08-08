@@ -27,7 +27,7 @@ operator's rules cannot be expressed as engine cost items:
 
 Also: broker fixed at 116 000 ₽, the СБКТС/ЭПТС line removed (his quote is «под
 ключ во Владивостоке»), the tariff block rounded UP to the nearest 100 ₽
-(«мы округляем вверх до нулей») in its own visible row, and a CBR footnote on
+(«мы округляем вверх до нулей»), and a CBR footnote on
 every quote — the operator's call, «пока бери по ЦБ и явно это пиши под
 звёздочкой», because the client's bank charges more than the CBR rate we
 compute with (54.2 vs 51.4926 on his own quote, a 5.3% markup).
@@ -104,8 +104,8 @@ would not have surfaced if the fixture had been fitted to the answer.
      of dashes; now every other line carries a number, so it would quote a car
      with no duty and call it "exact". Exactly one is required.
   6. Cost item ids may no longer collide with calculator-generated rows
-     (`lot`, `duty`, `recycling`, `clearance`, `tariff-rounding`) — an item
-     called `duty` silently took the real duty out of the rounded block.
+     (`lot`, `duty`, `recycling`, `clearance`) — an item called `duty` silently
+     took the real duty out of the rounded block.
   7. The price split dumped its residual on the last row, which goes negative
      for ~5% of rate/amount combinations with two WON items; rows are now
      differences of rounded running totals. A zero WON item is dropped rather
