@@ -85,9 +85,14 @@ Then `docs/harness/project.md` and the head of the queue.
 One wait loop is your only listening mechanism, re-armed by acknowledging:
 
 ```
-orca orchestration check --wait --types worker_done,question,escalation --timeout-ms 600000 --json
-orca orchestration check --ack <delivery_id> ...     # ack, or the batch replays forever
+python3 harness/ears.py [--ack <delivery_id>]        # one waiter, refusal printed
 ```
+
+Use the wrapper, not the raw command: Orca allows exactly ONE actionable
+waiter per run, and arming a second returns `ok: false, waiter_exists` while
+exiting 0 — measured 2026-08-08, a second wait looked armed and was deaf.
+`ears.py` exits nonzero and prints `EARS: REFUSED ...` instead. Acking is
+still mandatory — an unacknowledged delivery replays forever.
 
 An unacknowledged delivery replays and everything new queues behind it.
 A timeout is a checkpoint, not a failure — never kill a worker for silence.
