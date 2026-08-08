@@ -39,6 +39,13 @@ Lot 41599967 is DEAD (404, confirmed 2026-08-08) - his quote is a sold car,
 so it lives on only as a fixture test that must reproduce 5,045,020 to the
 ruble; the live accept uses a fresh lot. His EUR is the CBR rate of the quote
 date (88.5259 on 15.07.2026) and his single duty line already contains the
-clearance fee - decomposition closes to 43 RUB at 1984 cc. Keep the
+clearance fee - decomposition closes to 43 RUB at 1984 cc. Two rules settled after dispatch (2026-08-08): computed tariff lines are
+rounded UP to the nearest 100 RUB (operator: «мы округляем вверх до нулей»;
+2 326 157 -> 2 326 200 is his own figure, and with it the quote reproduces
+5 045 020 exactly), and the commission ladder brackets on the subtotal
+BEFORE commission - bracketing on the final total is self-referential near
+a boundary and worth 25 000 RUB in that band.
+
+Keep the
 engine's honesty rules (dash / floor / «по запросу») intact for lots his
 model cannot price.
