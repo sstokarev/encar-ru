@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "generatedAt": "2026-08-08",
+  "entries": [
+    {
+      "make": "hyundai",
+      "aliases": ["ioniq 5", "ioniq5"],
+      "from": "202102",
+      "fuel": "electric",
+      "electricHp30min": 76
+    },
+    {
+      "make": "hyundai",
+      "aliases": ["sonata"],
+      "from": "201903",
+      "to": "202312",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1999,
+      "iceHp": 152,
+      "electricHp30min": 20,
+      "grades": ["smart", "premium", "prestige", "exclusive"]
+    }
+  ]
+}
