@@ -38,15 +38,18 @@
  * 01.12.2025) the recycling fee is looked up by power, and the reduced
  * personal-use rate (5 200 ₽ for a used car) survives only up to 160 hp and
  * 3000 cm³. Above that the same car pays 1.4-6.9 M ₽. Power is not published
- * on the encar listing, so the fee is dashed rather than guessed. For a
- * hybrid it is dashed even when a power figure IS known: the decree adds the
- * electric motor's 30-minute power to the ICE power for parallel hybrids, and
- * a listing gives at most one of the two.
+ * on the encar listing (measured: docs/harness/spike-power.md), so it comes
+ * from the drom.ru specs catalog (src/calc/specs.ts, tks-parity task):
+ * powerHp is the ICE figure, electricHp30min the motor's 30-minute figure.
+ * A parallel hybrid's fee power is their SUM (ПП №1291, сноска 2 к
+ * приложению); with either figure missing the fee line dashes rather than
+ * guesses.
  *
- * "по запросу" is kept for exactly two cases: the lot price itself is
- * unusable, and electric vehicles (Решение Совета ЕЭК № 35 от 24.02.2026 gave
- * EVs their own codes and disposal restrictions — a separate code path that
- * is not implemented).
+ * EVs and SEQUENTIAL hybrids fall outside ЕЭК №107 entirely and compute on
+ * their own track (tks.ru parity): пошлина ЕТТ 15% + акциз руб/л.с. + НДС +
+ * утильсбор по EV-шкале, all keyed on the 30-minute power — see
+ * EvTrackRates. "по запросу" is kept for exactly one case: the lot price
+ * itself is unusable (or the config carries a malformed item).
  *
  * Garbage in never becomes a confident number out, and "missing" is not the
  * same thing as "garbage" (R3):
@@ -103,6 +106,21 @@ export interface LotParams {
    * approximate and carries AGE_BRACKET_NOTE.
    */
   ageNearBracket?: boolean;
+  /**
+   * Electric motor 30-minute power in hp (drom.ru specs catalog,
+   * src/calc/specs.ts). The legal power basis for EVs and sequential hybrids
+   * (акциз, утильсбор), and the second addend of a parallel hybrid's
+   * recycling-fee power (ICE + 30-min electric, ПП №1291 ред. №1713).
+   */
+  electricHp30min?: number;
+  /**
+   * Powertrain kind for customs routing (specs catalog): "sequential"
+   * (series-only, ТН ВЭД 8703 80 000 5) clears like an EV; "parallel"
+   * (mechanical link, incl. series-parallel) clears under ЕЭК №107 by
+   * displacement. Absent for non-hybrids or when the catalog has no match —
+   * a hybrid without a kind keeps its power lines dashed.
+   */
+  hybridKind?: "parallel" | "sequential";
 }
 
 export interface FxRates {
@@ -154,8 +172,8 @@ export const UNKNOWN_DASH = "—";
  * approx    — same, but computed from partially estimated params (U7);
  * partial   — at least one customs line could not be computed; the total is a
  *             provable floor and must be rendered as "от N ₽";
- * onRequest — the lot price itself is unusable, the lot is an EV, or the
- *             config carries a malformed item: no total may be shown.
+ * onRequest — the lot price itself is unusable or the config carries a
+ *             malformed item: no total may be shown.
  */
 export type Precision = "exact" | "approx" | "partial" | "onRequest";
 
@@ -188,6 +206,110 @@ const NEED_LOT_PARAMS_NOTE = "нужны объём двигателя и год
 const NEED_POWER_NOTE = "нужна мощность двигателя (л.с.)";
 const NEED_HYBRID_POWER_NOTE =
   "для гибрида нужна суммарная мощность ДВС и электромотора";
+const NEED_EV_POWER_NOTE =
+  "нужна 30-минутная мощность электромотора (л.с.)";
+const VAT_NEEDS_EXCISE_NOTE = "считается после акциза (нужна мощность)";
+const NEED_AGE_NOTE = "нужен год выпуска";
+
+/**
+ * EV / sequential-hybrid track (tks.ru parity): ЕЭК №107 единые ставки do
+ * not cover ТН ВЭД 8703 80 000 3 (BEV) / 8703 80 000 5 (REEV), so a физлицо
+ * pays the совокупный таможенный платёж instead: пошлина (ЕТТ, ad valorem)
+ * + акциз (руб/л.с. of the motor's 30-minute power, ст.193 НК РФ) + НДС on
+ * (стоимость + пошлина + акциз), plus утильсбор on its own EV grid and the
+ * regular clearance fee.
+ *
+ * RATES LIVE HERE, NOT IN CONFIG, TEMPORARILY: src/config.default.ts /
+ * site/config.json are owned by the live task/importer-pricing (architect
+ * ruling 2026-08-08); migrating these tables into CustomsConfig is a planned
+ * follow-up dispatch. The engine stays a bracket interpreter — every
+ * function below takes the tables as parameters, and only computeAllIn
+ * defaults to these constants.
+ */
+export interface ExciseBracket {
+  /** Inclusive upper bound in hp; the last bracket omits it (open-ended). */
+  maxHp?: number;
+  rubPerHp: number;
+}
+
+export interface EvTrackRates {
+  /** ISO date the encoded rules came into force (provenance, not a switch). */
+  asOf: string;
+  /** ЕТТ ЕАЭС ad valorem duty, % of the customs value. */
+  dutyPct: number;
+  /** НДС, % of (customs value + duty + акциз). */
+  vatPct: number;
+  /** Акциз on cars by power, руб за 1 л.с. (ст.193 НК РФ). */
+  exciseBrackets: ExciseBracket[];
+  /** Утильсбор for EVs/sequential hybrids by 30-minute power. */
+  recycling: {
+    reduced: RecyclingReducedEvRate;
+    brackets: RecyclingPowerBracket[];
+  };
+}
+
+export interface RecyclingReducedEvRate {
+  /** The личное-пользование reduced rate holds up to this 30-min power. */
+  maxHp: number;
+  under3yRub: number;
+  from3yRub: number;
+}
+
+/**
+ * Values as of 2026-08-08 (verification pass in test/calc.test.ts pins the
+ * boundaries; sources inline below).
+ */
+export const DEFAULT_EV_TRACK_RATES: EvTrackRates = {
+  asOf: "2026-01-01",
+  // ЕТТ ЕАЭС for 8703 80 000 3 / 8703 80 000 5 (Решение Коллегии ЕЭК №81 от
+  // 23.09.2025, codes split in force 22.01.2026). The 0% privilege quota
+  // (Решение Совета ЕЭК №111 от 05.12.2025) covers BY/AM/KG only — for a RU
+  // buyer the rate is the plain 15%.
+  dutyPct: 15,
+  // НДС 22% с 01.01.2026 (ФЗ №425-ФЗ от 28.11.2025). tks.ru may still print
+  // 20% on stale pages; 22% is what the border charges.
+  vatPct: 22,
+  // Акциз на легковые автомобили, ст.193 НК РФ, ставки 2026 (ФЗ №425-ФЗ),
+  // руб за 1 л.с. (0,75 кВт). Power basis for this track: the electric
+  // motor's 30-minute power.
+  exciseBrackets: [
+    { maxHp: 90, rubPerHp: 0 },
+    { maxHp: 150, rubPerHp: 64 },
+    { maxHp: 200, rubPerHp: 613 },
+    { maxHp: 300, rubPerHp: 1004 },
+    { maxHp: 400, rubPerHp: 1711 },
+    { maxHp: 500, rubPerHp: 1771 },
+    { rubPerHp: 1829 },
+  ],
+  // Утильсбор, ПП РФ №1291 в ред. ПП №1713 (01.12.2025) + индексация ПП
+  // №1255 c 01.01.2026: льгота физлица/личное пользование 3 400 / 5 200 ₽
+  // держится до 80 л.с. 30-минутной мощности; выше — полная EV-шкала.
+  // EV/sequential-hybrid grid, приложение к ПП №1291 (ред. 06.02.2026),
+  // items 1/3, 2026 column, база 20 000 ₽ (verified against the annex text
+  // cell-by-cell, 2026-08-08; ПП №89 от 06.02.2026 не трогает физлиц; the
+  // klerk.ru "отмена льготы" claim is refuted — its 150k base is раздел II,
+  // грузовые). Brackets by 30-минутная мощность; the льгота 0.17/0.26 row
+  // holds to 58,84 кВт = 80 л.с. Above 280 л.с. every annex row repeats the
+  // same coefficients, hence one open-ended bracket.
+  recycling: {
+    reduced: { maxHp: 80, under3yRub: 3400, from3yRub: 5200 },
+    brackets: [
+      { maxHp: 80, under3yRub: 800800, from3yRub: 1408800 },
+      { maxHp: 100, under3yRub: 991200, from3yRub: 1641600 },
+      { maxHp: 130, under3yRub: 1317600, from3yRub: 1912800 },
+      { maxHp: 160, under3yRub: 1560000, from3yRub: 2227200 },
+      { maxHp: 190, under3yRub: 1848000, from3yRub: 2594400 },
+      { maxHp: 220, under3yRub: 2193600, from3yRub: 3024000 },
+      { maxHp: 250, under3yRub: 2599200, from3yRub: 3523200 },
+      { maxHp: 280, under3yRub: 3079200, from3yRub: 4104000 },
+      { under3yRub: 3648000, from3yRub: 4780800 },
+    ],
+  },
+};
+
+/** Labels for the EV-track lines (config-bound later, see EvTrackRates). */
+const EXCISE_LABEL = "Акциз";
+const VAT_LABEL = "НДС";
 
 /**
  * Finite and strictly positive — the only shape a money amount, an FX rate or
@@ -228,7 +350,8 @@ function isAmount(value: unknown): value is number {
 
 /**
  * Precision the given lot params can support for the DUTY block (U7, R3):
- * duty not computable (missing age/cc or an EV) -> "onRequest"; computable
+ * duty not computable (missing age/cc on the единые-ставки track) ->
+ * "onRequest"; computable
  * from estimated params -> "approx"; otherwise "exact".
  *
  * Deliberately unchanged by the power-based recycling reform: this predicate
@@ -241,8 +364,13 @@ function isAmount(value: unknown): value is number {
 export function lotPrecision(
   lot: Omit<LotParams, "priceKrw">,
 ): Exclude<Precision, "partial"> {
+  // EVs and sequential hybrids pay an ad-valorem duty (EV track): the duty
+  // block needs nothing beyond the price, so the params never block it.
+  const evTrack =
+    lot.fuel === "electric" ||
+    (lot.fuel === "hybrid" && lot.hybridKind === "sequential");
   const computable =
-    lot.fuel !== "electric" && isAge(lot.ageYears) && isPositive(lot.engineCc);
+    evTrack || (isAge(lot.ageYears) && isPositive(lot.engineCc));
   if (!computable) return "onRequest";
   return lot.estimated === true ? "approx" : "exact";
 }
@@ -434,6 +562,47 @@ function computeClearanceRub(lotRub: number, customs: CustomsConfig): number {
   return pickBracket(customs.clearanceFeeBrackets, lotRub, (b) => b.maxRub).fee;
 }
 
+/** Акциз in RUB: bracket rate (руб/л.с.) times the power. */
+function computeExciseRub(
+  powerHp: number,
+  brackets: readonly ExciseBracket[],
+): { rub: number; note: string } {
+  const bracket = pickBracket(brackets, powerHp, (b) => b.maxHp);
+  return {
+    rub: bracket.rubPerHp * powerHp,
+    note: `${bracket.rubPerHp} ₽ за л.с. × ${powerHp} л.с.`,
+  };
+}
+
+/**
+ * Утильсбор for the EV/sequential-hybrid track: the reduced personal-use
+ * rate up to the power cap, the EV grid above it. Same 36-month used/new
+ * boundary as the rest of the engine.
+ */
+function computeEvRecyclingRub(
+  ageYears: number,
+  powerHp: number,
+  rates: EvTrackRates,
+): { rub: number; note: string } {
+  const used = ageYears * 12 >= DUTY_BRACKET_MONTHS.y3;
+  const reduced = rates.recycling.reduced;
+  if (powerHp <= reduced.maxHp) {
+    return {
+      rub: used ? reduced.from3yRub : reduced.under3yRub,
+      note: `льготная ставка (до ${reduced.maxHp} л.с. 30-мин. мощности)`,
+    };
+  }
+  const bracket = pickBracket(
+    rates.recycling.brackets,
+    powerHp,
+    (b) => b.maxHp,
+  );
+  return {
+    rub: used ? bracket.from3yRub : bracket.under3yRub,
+    note: `шкала для электромобилей (${powerHp} л.с.)`,
+  };
+}
+
 /** A dashed line: no amount, no contribution to the total. */
 function dash(id: string, label: string, note: string): UnknownCostLine {
   return { id, label, unknown: true, note };
@@ -464,16 +633,21 @@ export function computeAllIn(
   const paramsMalformed =
     isInvalid(lot.ageYears, isAge) ||
     isInvalid(lot.engineCc, isPositive) ||
-    isInvalid(lot.powerHp, isPositive);
+    isInvalid(lot.powerHp, isPositive) ||
+    isInvalid(lot.electricHp30min, isPositive);
   const lotRub = priceKnown ? Math.round(lot.priceKrw * rates.krwRub) : 0;
   // Unrounded customs value in EUR for the <3y percent tiers.
   const lotEur = priceKnown ? (lot.priceKrw * rates.krwRub) / rates.eurRub : 0;
   const customs = config.customs;
 
-  // EVs follow different rules entirely and are quoted manually (plan
-  // decision): their customs block is not dashed, it is refused outright.
-  const isEv = lot.fuel === "electric";
-  const canExpandCustoms = priceKnown && !isEv;
+  // EVs and sequential hybrids fall outside ЕЭК №107 and pay the совокупный
+  // платёж instead (EV track, see EvTrackRates); everything else keeps the
+  // единые-ставки block. A hybrid with an unknown kind stays on the default
+  // track — its duty computes by displacement, its power lines dash.
+  const evTrack =
+    lot.fuel === "electric" ||
+    (lot.fuel === "hybrid" && lot.hybridKind === "sequential");
+  const canExpandCustoms = priceKnown;
 
   const items: CostLine[] = [];
   if (priceKnown) {
@@ -524,63 +698,140 @@ export function computeAllIn(
     ) {
       customsExpanded = true;
       const ageYears = lot.ageYears;
-      const engineCc = lot.engineCc;
-      const dutyKnown = isAge(ageYears) && isPositive(engineCc);
 
-      if (dutyKnown) {
-        const duty = computeDutyEur(lotEur, ageYears, engineCc, customs);
+      if (evTrack) {
+        // --- EV / sequential-hybrid track: пошлина + акциз + НДС +
+        // утильсбор (EV grid) + оформление. Power basis throughout is the
+        // electric motor's 30-minute power.
+        const ev = DEFAULT_EV_TRACK_RATES;
+        const evPowerHp = lot.electricHp30min;
+        const dutyRub = Math.round((lotRub * ev.dutyPct) / 100);
         items.push({
           id: "duty",
           label: customs.labels.duty,
-          rub: Math.round(duty.eur * rates.eurRub),
-          note: duty.note,
+          rub: dutyRub,
+          note: `${ev.dutyPct}% таможенной стоимости (ТН ВЭД 8703 80)`,
         });
-      } else {
-        customsIncomplete = true;
-        items.push(dash("duty", customs.labels.duty, NEED_LOT_PARAMS_NOTE));
-      }
 
-      // A parallel hybrid's fee is looked up on ICE power PLUS the electric
-      // motor's 30-minute power; a listing never carries both, so a hybrid is
-      // dashed whatever power figure arrived.
-      const hybrid = lot.fuel === "hybrid";
-      const powerHp = lot.powerHp;
-      if (dutyKnown && !hybrid && isPositive(powerHp)) {
-        const recycling = computeRecyclingRub(
-          ageYears,
-          engineCc,
-          powerHp,
-          customs,
-        );
+        if (isPositive(evPowerHp)) {
+          const excise = computeExciseRub(evPowerHp, ev.exciseBrackets);
+          const exciseRub = Math.round(excise.rub);
+          items.push({
+            id: "excise",
+            label: EXCISE_LABEL,
+            rub: exciseRub,
+            note: excise.note,
+          });
+          items.push({
+            id: "vat",
+            label: VAT_LABEL,
+            rub: Math.round(
+              ((lotRub + dutyRub + exciseRub) * ev.vatPct) / 100,
+            ),
+            note: `${ev.vatPct}% (стоимость + пошлина + акциз)`,
+          });
+        } else {
+          // Without the power there is no акциз figure, and a НДС computed
+          // on a smaller base would print a number that is not the tax: both
+          // lines dash, the total stays a provable floor.
+          customsIncomplete = true;
+          items.push(dash("excise", EXCISE_LABEL, NEED_EV_POWER_NOTE));
+          items.push(dash("vat", VAT_LABEL, VAT_NEEDS_EXCISE_NOTE));
+        }
+
+        if (isAge(ageYears) && isPositive(evPowerHp)) {
+          const recycling = computeEvRecyclingRub(ageYears, evPowerHp, ev);
+          items.push({
+            id: "recycling",
+            label: customs.labels.recycling,
+            rub: Math.round(recycling.rub),
+            note: recycling.note,
+          });
+        } else {
+          customsIncomplete = true;
+          items.push(
+            dash(
+              "recycling",
+              customs.labels.recycling,
+              isPositive(evPowerHp) ? NEED_AGE_NOTE : NEED_EV_POWER_NOTE,
+            ),
+          );
+        }
+
         items.push({
-          id: "recycling",
-          label: customs.labels.recycling,
-          rub: Math.round(recycling.rub),
-          note: recycling.note,
+          id: "clearance",
+          label: customs.labels.clearance,
+          rub: Math.round(computeClearanceRub(lotRub, customs)),
         });
       } else {
-        customsIncomplete = true;
-        items.push(
-          dash(
-            "recycling",
-            customs.labels.recycling,
-            hybrid
-              ? NEED_HYBRID_POWER_NOTE
-              : dutyKnown
-                ? NEED_POWER_NOTE
-                : NEED_LOT_PARAMS_NOTE,
-          ),
-        );
-      }
+        const engineCc = lot.engineCc;
+        const dutyKnown = isAge(ageYears) && isPositive(engineCc);
 
-      // The clearance fee only needs the lot value, which priceKnown proved.
-      items.push({
-        id: "clearance",
-        label: customs.labels.clearance,
-        rub: Math.round(computeClearanceRub(lotRub, customs)),
-      });
+        if (dutyKnown) {
+          const duty = computeDutyEur(lotEur, ageYears, engineCc, customs);
+          items.push({
+            id: "duty",
+            label: customs.labels.duty,
+            rub: Math.round(duty.eur * rates.eurRub),
+            note: duty.note,
+          });
+        } else {
+          customsIncomplete = true;
+          items.push(dash("duty", customs.labels.duty, NEED_LOT_PARAMS_NOTE));
+        }
+
+        // A parallel hybrid's fee is looked up on ICE power PLUS the
+        // electric motor's 30-minute power (annex сноска 2); the fee line
+        // computes only when the catalog delivered both figures and the kind
+        // is known to be parallel — otherwise it dashes.
+        const hybrid = lot.fuel === "hybrid";
+        const iceHp = lot.powerHp;
+        const feePowerHp = hybrid
+          ? lot.hybridKind === "parallel" &&
+            isPositive(iceHp) &&
+            isPositive(lot.electricHp30min)
+            ? iceHp + lot.electricHp30min
+            : undefined
+          : iceHp;
+        if (dutyKnown && isPositive(feePowerHp)) {
+          const recycling = computeRecyclingRub(
+            ageYears,
+            engineCc,
+            feePowerHp,
+            customs,
+          );
+          items.push({
+            id: "recycling",
+            label: customs.labels.recycling,
+            rub: Math.round(recycling.rub),
+            note: hybrid
+              ? `${recycling.note} — мощность ДВС + электромотора`
+              : recycling.note,
+          });
+        } else {
+          customsIncomplete = true;
+          items.push(
+            dash(
+              "recycling",
+              customs.labels.recycling,
+              hybrid
+                ? NEED_HYBRID_POWER_NOTE
+                : dutyKnown
+                  ? NEED_POWER_NOTE
+                  : NEED_LOT_PARAMS_NOTE,
+            ),
+          );
+        }
+
+        // The clearance fee only needs the lot value (priceKnown proved it).
+        items.push({
+          id: "clearance",
+          label: customs.labels.clearance,
+          rub: Math.round(computeClearanceRub(lotRub, customs)),
+        });
+      }
     } else {
-      // Unknown formula identifier, a duplicate customs item, an EV, or a lot
+      // Unknown formula identifier, a duplicate customs item, or a lot
       // whose price is unusable: a config/lot problem, not a priced-later one.
       unhandled = true;
     }
