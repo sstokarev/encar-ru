@@ -6,13 +6,14 @@ size_why = "the embed shape decides how the calculator looks inside someone else
 owns = ["site/embed.html", "src/page/embed.ts", "test/embed.test.ts", "docs/harness/tilda-embed.md"]
 reads = ["site/calc.html", "src/page/main.ts", "src/page/render.ts", "docs/harness/project.md", "docs/harness/pipeline.md"]
 accepts = ["operator pastes the embed snippet into a real Tilda page, opens it on a phone and on a desktop, and the calculator works inside it without a scrollbar-in-a-scrollbar or a cut-off result"]
-after = []
+after = ["landing"]
 +++
 
 The operator's words, 2026-08-08: «это пока ок, в конце будем на сайт в тильде
-встраивать». The GitHub Pages landing stays as-is; the calculator's real home
-becomes a block inside his Tilda site. That replaces the withdrawn
-`site-pitch` brief.
+встраивать». PARKED until task/landing lands — the operator set the order on 2026-08-08:
+«первая версия - отдельным лендосом в репо», «только потом будем встраивать,
+не торопись». Do not dispatch this before the landing exists and he has used
+it; the embed shape below is the right question asked too early.
 
 Two embed shapes, and the choice is the substance of this task — measure, do
 not assume. An **iframe** (Tilda T123 HTML block) isolates our CSS from
