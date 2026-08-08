@@ -70,12 +70,47 @@ export interface MatchedSpec {
  * this close is the same engine, anything farther is a different one. */
 const CC_TOLERANCE = 30;
 
+/**
+ * A car registered up to this many months after its modification stopped
+ * production is still plausibly that modification (dealer leftovers); such a
+ * closed-window candidate is kept during window refinement and must agree
+ * with the in-window survivors, or the match refuses.
+ */
+const LEFTOVER_GRACE_MONTHS = 6;
+
+/** Whole months between two "YYYYMM" stamps (b >= a). */
+function monthsBetween(a: string, b: string): number {
+  return (
+    (Number(b.slice(0, 4)) - Number(a.slice(0, 4))) * 12 +
+    (Number(b.slice(4)) - Number(a.slice(4)))
+  );
+}
+
+/** True when `token` appears in `text` on word boundaries (space-delimited). */
+function hasToken(text: string, token: string): boolean {
+  return ` ${text} `.includes(` ${token} `);
+}
+
 function isYearMonth(v: unknown): v is string {
-  return typeof v === "string" && /^\d{6}$/.test(v);
+  if (typeof v !== "string" || !/^\d{6}$/.test(v)) return false;
+  const month = Number(v.slice(4));
+  return month >= 1 && month <= 12;
 }
 
 function isPositive(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v) && v > 0;
+}
+
+/**
+ * Plausibility bounds: a typo'd catalog cell (kW captured as hp, a dropped
+ * digit) must fail validation rather than compute a confident wrong fee.
+ */
+function isPlausibleHp(v: unknown): v is number {
+  return isPositive(v) && v >= 5 && v <= 1500;
+}
+
+function isPlausibleCc(v: unknown): v is number {
+  return isPositive(v) && v >= 500 && v <= 7000;
 }
 
 function isStringArray(v: unknown): v is string[] {
@@ -88,8 +123,10 @@ function isValidEntry(e: unknown): e is SpecsEntry {
   if (typeof o.make !== "string" || o.make.length === 0) return false;
   if (!isStringArray(o.aliases) || (o.aliases as string[]).length === 0) return false;
   if (!isYearMonth(o.from)) return false;
-  if (o.to !== undefined && !isYearMonth(o.to)) return false;
-  if (!isPositive(o.electricHp30min)) return false;
+  if (o.to !== undefined && (!isYearMonth(o.to) || o.to < (o.from as string))) {
+    return false;
+  }
+  if (!isPlausibleHp(o.electricHp30min)) return false;
   if (o.grades !== undefined && !isStringArray(o.grades)) return false;
   if (o.fuel === "electric") {
     return o.hybridKind === undefined && o.engineCc === undefined && o.iceHp === undefined;
@@ -97,8 +134,8 @@ function isValidEntry(e: unknown): e is SpecsEntry {
   if (o.fuel !== "hybrid") return false;
   return (
     (o.hybridKind === "parallel" || o.hybridKind === "sequential") &&
-    isPositive(o.engineCc) &&
-    isPositive(o.iceHp)
+    isPlausibleCc(o.engineCc) &&
+    isPlausibleHp(o.iceHp)
   );
 }
 
@@ -182,18 +219,31 @@ export function matchSpecs(
   }
   if (candidates.length === 0) return undefined;
 
-  // Production-window refinement: entries whose window CONTAINS the
-  // registration month beat open-ended earlier generations the car merely
-  // postdates.
+  // Production-window refinement. An entry whose window contains the
+  // registration month beats an earlier generation the car merely postdates —
+  // but a RECENTLY closed window is still plausible (a leftover registers
+  // months after production ends), so such candidates are kept and must
+  // AGREE with the survivors below. Dropping them silently handed a
+  // facelift/N-variant lot the wrong entry's power with "exact" confidence
+  // (review finding, 2026-08-08).
   const inWindow = candidates.filter(
     (e) => e.to === undefined || car.yearMonth <= e.to,
   );
-  if (inWindow.length > 0) candidates = inWindow;
+  if (inWindow.length > 0) {
+    const plausible = candidates.filter(
+      (e) =>
+        e.to !== undefined &&
+        car.yearMonth > e.to &&
+        monthsBetween(e.to, car.yearMonth) <= LEFTOVER_GRACE_MONTHS,
+    );
+    candidates = [...inWindow, ...plausible];
+  }
 
-  // Grade refinement, only when it actually discriminates.
+  // Grade refinement, only when it actually discriminates. Tokens compare on
+  // word boundaries: the "smart" trim must not match inside "Smartstream".
   if (candidates.length > 1) {
     const byGrade = candidates.filter(
-      (e) => e.grades !== undefined && e.grades.some((g) => title.includes(g)),
+      (e) => e.grades !== undefined && e.grades.some((g) => hasToken(title, g)),
     );
     if (byGrade.length > 0 && byGrade.length < candidates.length) {
       candidates = byGrade;

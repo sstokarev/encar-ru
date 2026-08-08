@@ -757,12 +757,6 @@ export function computeAllIn(
             ),
           );
         }
-
-        items.push({
-          id: "clearance",
-          label: customs.labels.clearance,
-          rub: Math.round(computeClearanceRub(lotRub, customs)),
-        });
       } else {
         const engineCc = lot.engineCc;
         const dutyKnown = isAge(ageYears) && isPositive(engineCc);
@@ -814,7 +808,9 @@ export function computeAllIn(
             dash(
               "recycling",
               customs.labels.recycling,
-              hybrid
+              // The note names what is actually missing: a hybrid with both
+              // powers known but no age/cc must not claim to need power.
+              hybrid && feePowerHp === undefined
                 ? NEED_HYBRID_POWER_NOTE
                 : dutyKnown
                   ? NEED_POWER_NOTE
@@ -822,14 +818,15 @@ export function computeAllIn(
             ),
           );
         }
-
-        // The clearance fee only needs the lot value (priceKnown proved it).
-        items.push({
-          id: "clearance",
-          label: customs.labels.clearance,
-          rub: Math.round(computeClearanceRub(lotRub, customs)),
-        });
       }
+
+      // The clearance fee only needs the lot value (priceKnown proved it) —
+      // same line on both tracks.
+      items.push({
+        id: "clearance",
+        label: customs.labels.clearance,
+        rub: Math.round(computeClearanceRub(lotRub, customs)),
+      });
     } else {
       // Unknown formula identifier, a duplicate customs item, or a lot
       // whose price is unusable: a config/lot problem, not a priced-later one.

@@ -425,7 +425,7 @@ describe("recycling fee: displacement class x power bracket x age", () => {
     expect(result.precision).toBe("partial");
   });
 
-  it("renders a dash for a hybrid when only one power figure is known", () => {
+  it("renders a dash for a hybrid with one power figure and no kind", () => {
     // For a parallel hybrid the decree adds the electric motor's 30-minute
     // power to the ICE power; with either figure (or the kind) missing the
     // fee line dashes.
@@ -472,6 +472,38 @@ describe("recycling fee: displacement class x power bracket x age", () => {
       electricHp30min: 30,
     });
     expect(itemRub(result, "recycling")).toBe(3_400);
+  });
+
+  it("pins the combined-power льгота boundary at exactly 160 л.с.", () => {
+    const at = (iceHp: number, electricHp: number): number =>
+      itemRub(
+        compute({
+          ...FULL_LOT,
+          fuel: "hybrid",
+          hybridKind: "parallel",
+          powerHp: iceHp,
+          electricHp30min: electricHp,
+        }),
+        "recycling",
+      );
+    expect(at(130, 30)).toBe(3_400); // 160 combined: льгота holds
+    expect(at(130, 31)).toBe(900_000); // 161: full grid, ≤190 bracket, <3y
+  });
+
+  it("names the missing duty params, not power, for a hybrid with both powers", () => {
+    // Both powers known, age unknown: the fee line's note must ask for the
+    // lot params — claiming the power is missing would mislead the manager.
+    const result = compute({
+      ...FULL_LOT,
+      ageYears: undefined,
+      fuel: "hybrid",
+      hybridKind: "parallel",
+      powerHp: 120,
+      electricHp30min: 30,
+    });
+    const recycling = line(result, "recycling");
+    expect(isUnknownLine(recycling)).toBe(true);
+    expect(recycling.note).toBe("нужны объём двигателя и год выпуска");
   });
 });
 
@@ -831,12 +863,35 @@ describe("EV / sequential hybrid track", () => {
     );
   });
 
-  it("pins the excise boundary: 90 л.с. is free, 91 is not", () => {
-    expect(itemRub(compute({ ...EV_LOT, electricHp30min: 90 }), "excise")).toBe(0);
-    // 64 ₽/л.с. × 91 = 5 824
-    expect(itemRub(compute({ ...EV_LOT, electricHp30min: 91 }), "excise")).toBe(
-      5_824,
-    );
+  it("pins every excise bracket boundary (ст.193 НК, 2026)", () => {
+    const exciseAt = (hp: number): number =>
+      itemRub(compute({ ...EV_LOT, electricHp30min: hp }), "excise");
+    expect(exciseAt(90)).toBe(0);
+    expect(exciseAt(91)).toBe(5_824); // 64 × 91
+    expect(exciseAt(150)).toBe(9_600); // 64 × 150
+    expect(exciseAt(151)).toBe(92_563); // 613 × 151
+    expect(exciseAt(200)).toBe(122_600); // 613 × 200
+    expect(exciseAt(201)).toBe(201_804); // 1004 × 201
+    expect(exciseAt(300)).toBe(301_200); // 1004 × 300
+    expect(exciseAt(301)).toBe(515_011); // 1711 × 301
+    expect(exciseAt(400)).toBe(684_400); // 1711 × 400
+    expect(exciseAt(401)).toBe(710_171); // 1771 × 401
+    expect(exciseAt(500)).toBe(885_500); // 1771 × 500
+    expect(exciseAt(501)).toBe(916_329); // 1829 × 501
+  });
+
+  it("dashes акциз, НДС and утильсбор for a sequential hybrid without power", () => {
+    const result = compute({
+      priceKrw: 20_000_000,
+      ageYears: 2,
+      fuel: "hybrid",
+      hybridKind: "sequential",
+    });
+    expect(result.precision).toBe("partial");
+    expect(itemRub(result, "duty")).toBe(150_000);
+    expect(isDash(result, "excise")).toBe(true);
+    expect(isDash(result, "vat")).toBe(true);
+    expect(isDash(result, "recycling")).toBe(true);
   });
 
   it("pins the льгота boundary: 80 л.с. reduced, 81 on the grid", () => {

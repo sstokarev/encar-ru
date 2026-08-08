@@ -98,26 +98,42 @@ function rowByLabel(rows, label) {
   return undefined;
 }
 
-/** «Вид гибрида» sits outside the spec table, in the header cards. */
+/**
+ * «Вид гибрида» sits outside the spec table, in the header cards. Only the
+ * three values measured 2026-08-08 are recognized; anything else returns
+ * undefined and the modification is refused as half-parsed — a misread kind
+ * would put the lot on the wrong LEGAL track, not just show a wrong number.
+ */
 function hybridKindOf(html) {
   const m = /Вид гибрида<\/div><div[^>]*>([^<]+)</.exec(html);
   if (!m) return undefined;
   const kind = m[1].trim().toLowerCase();
-  if (kind.startsWith("последовательный")) return "sequential";
-  return "parallel"; // Параллельный and Последовательно-параллельный alike
+  if (kind === "последовательный") return "sequential";
+  if (kind === "параллельный" || kind === "последовательно-параллельный") {
+    return "parallel";
+  }
+  return undefined;
 }
 
 const num = (s) => {
   if (s === undefined) return undefined;
-  const m = /[\d.]+/.exec(s.replace(",", "."));
+  // Thousands separators ("1 999", NBSP) must not split the number: strip
+  // spaces first, then read the leading digit run.
+  const m = /[\d.]+/.exec(s.replace(/[\s ]+/g, "").replace(",", "."));
   if (!m) return undefined;
   const v = Number(m[0]);
   return Number.isFinite(v) && v > 0 ? v : undefined;
 };
 
-/** "(03.2019 - 03.2021)" or "(04.2021 - н.в.)" from the mod page title. */
+/**
+ * "(03.2019 - 03.2021)" or "(04.2021 - н.в.)" from the mod page <title> ONLY
+ * — a page-global search could capture an unrelated parenthetical (another
+ * generation's breadcrumb) and assign a wrong production window.
+ */
 function productionWindow(html) {
-  const m = /\((\d{2})\.(\d{4})\s*-\s*(?:(\d{2})\.(\d{4})|[^)]*)\)/.exec(html);
+  const title = /<title>([^<]*)<\/title>/.exec(html);
+  if (!title) return undefined;
+  const m = /\((\d{2})\.(\d{4})\s*-\s*(?:(\d{2})\.(\d{4})|[^)]*)\)/.exec(title[1]);
   if (!m) return undefined;
   const win = { from: `${m[2]}${m[1]}` };
   if (m[3] !== undefined && m[4] !== undefined) win.to = `${m[4]}${m[3]}`;

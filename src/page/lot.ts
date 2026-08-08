@@ -22,12 +22,19 @@ import {
   type LotParams,
 } from "../calc/customs";
 import { isValidCatalog, matchSpecs, type SpecsCatalog } from "../calc/specs";
+import { CONFIG_URL } from "../config";
 import { parseFuel } from "../scan/params";
 import type { CarData } from "../encar/types";
 
-/** Deployed next to the page by the same GitHub Pages upload as config.json. */
-const SPECS_CATALOG_URL =
-  "https://sstokarev.github.io/encar-ru/specs-catalog.json";
+/**
+ * Deployed next to the page by the same GitHub Pages upload as config.json —
+ * derived from CONFIG_URL so a non-prod deploy keeps both on one base
+ * instead of silently losing the catalog.
+ */
+export const SPECS_CATALOG_URL = new URL(
+  "specs-catalog.json",
+  CONFIG_URL,
+).toString();
 
 const CATALOG_FETCH_TIMEOUT_MS = 3000;
 

@@ -82,6 +82,22 @@ describe("isValidCatalog", () => {
       isValidCatalog(catalog([{ ...IONIQ5, electricHp30min: 0 }])),
     ).toBe(false);
   });
+
+  it("rejects implausible values a typo'd cell could produce", () => {
+    // kW captured as hp, dropped digits, impossible months, inverted windows.
+    expect(
+      isValidCatalog(catalog([{ ...IONIQ5, electricHp30min: 2000 }])),
+    ).toBe(false);
+    expect(
+      isValidCatalog(catalog([{ ...SONATA_HEV, engineCc: 199 }])),
+    ).toBe(false);
+    expect(
+      isValidCatalog(catalog([{ ...SONATA_HEV, from: "201913" }])),
+    ).toBe(false);
+    expect(
+      isValidCatalog(catalog([{ ...SONATA_HEV, from: "202001", to: "201901" }])),
+    ).toBe(false);
+  });
 });
 
 describe("matchSpecs", () => {
@@ -233,6 +249,60 @@ describe("matchSpecs", () => {
     expect(matchSpecs(car({}), "hybrid", catalog([]))).toBeUndefined();
     expect(
       matchSpecs(car({ yearMonth: "garbage" }), "hybrid", cat),
+    ).toBeUndefined();
+  });
+
+  it("refuses when an open entry and a recently closed twin disagree", () => {
+    // The Ioniq 5 shape that produced a wrong-car match in review: an
+    // open-ended 76-hp entry and a 103-hp twin closed one month before the
+    // registration. The leftover is still plausibly the closed variant, so
+    // the match must refuse, not confidently pick the open entry.
+    const open: SpecsEntry = { ...IONIQ5, electricHp30min: 76 };
+    const closedTwin: SpecsEntry = {
+      ...IONIQ5,
+      to: "202403",
+      electricHp30min: 103,
+    };
+    expect(
+      matchSpecs(
+        car({ title: "Hyundai Ioniq 5", yearMonth: "202404", fuelName: "전기" }),
+        "electric",
+        catalog([open, closedTwin]),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("ignores a long-closed twin once the leftover grace expires", () => {
+    const open: SpecsEntry = { ...IONIQ5, electricHp30min: 76 };
+    const closedTwin: SpecsEntry = {
+      ...IONIQ5,
+      to: "202403",
+      electricHp30min: 103,
+    };
+    // 8 months after the twin's window closed: no longer a plausible
+    // leftover; the open entry wins alone.
+    const spec = matchSpecs(
+      car({ title: "Hyundai Ioniq 5", yearMonth: "202411", fuelName: "전기" }),
+      "electric",
+      catalog([open, closedTwin]),
+    );
+    expect(spec?.electricHp30min).toBe(76);
+  });
+
+  it("matches grade tokens on word boundaries only", () => {
+    // The "smart" trim must not fire inside "Smartstream": with the grade
+    // tie-break unable to discriminate, differing powers refuse.
+    const smart: SpecsEntry = { ...SONATA_HEV, grades: ["smart"], iceHp: 152 };
+    const other: SpecsEntry = { ...SONATA_HEV, grades: ["modern"], iceHp: 180 };
+    expect(
+      matchSpecs(
+        car({
+          title: "Hyundai Sonata Smartstream Premium",
+          displacementCc: 1999,
+        }),
+        "hybrid",
+        catalog([smart, other]),
+      ),
     ).toBeUndefined();
   });
 });

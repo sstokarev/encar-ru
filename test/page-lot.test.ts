@@ -3,7 +3,7 @@
  * own age semantics (end-of-month, month-accurate cliffs) and degrade
  * honestly: malformed inputs stay undefined, never guessed.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   computeAgeYears,
@@ -225,6 +225,27 @@ describe("loadSpecsCatalog", () => {
       ).toBeUndefined();
     } finally {
       restore();
+    }
+  });
+
+  it("aborts a hung fetch after the timeout and degrades to undefined", async () => {
+    vi.useFakeTimers();
+    // A fetch that never resolves on its own and only rejects on abort —
+    // exercises the real AbortController path, not a synchronous reject.
+    const original = globalThis.fetch;
+    globalThis.fetch = ((_url: unknown, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        );
+      })) as typeof fetch;
+    try {
+      const pending = loadSpecsCatalog("https://example.test/c.json");
+      await vi.advanceTimersByTimeAsync(3001);
+      expect(await pending).toBeUndefined();
+    } finally {
+      globalThis.fetch = original;
+      vi.useRealTimers();
     }
   });
 });

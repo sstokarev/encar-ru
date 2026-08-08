@@ -184,24 +184,6 @@
       "aliases": [
         "sonata"
       ],
-      "from": "201707",
-      "to": "201905",
-      "fuel": "hybrid",
-      "hybridKind": "parallel",
-      "engineCc": 1999,
-      "iceHp": 156,
-      "electricHp30min": 34,
-      "grades": [
-        "exclusive",
-        "nuu-gdi",
-        "premium"
-      ]
-    },
-    {
-      "make": "hyundai",
-      "aliases": [
-        "sonata"
-      ],
       "from": "201903",
       "to": "202305",
       "fuel": "hybrid",
@@ -410,23 +392,6 @@
       "aliases": [
         "k5"
       ],
-      "from": "201607",
-      "to": "201810",
-      "fuel": "hybrid",
-      "hybridKind": "parallel",
-      "engineCc": 1999,
-      "iceHp": 156,
-      "electricHp30min": 49,
-      "grades": [
-        "noblesse",
-        "special"
-      ]
-    },
-    {
-      "make": "kia",
-      "aliases": [
-        "k5"
-      ],
       "from": "201912",
       "fuel": "hybrid",
       "hybridKind": "parallel",
@@ -495,7 +460,6 @@
         "hybrid",
         "luxury",
         "noblesse",
-        "plug-in-hybrid",
         "prestige",
         "signature",
         "special",
