@@ -20,9 +20,9 @@ signal; the numbers come from the decrees themselves.
 
 | Config block | Source | Why this one |
 |---|---|---|
-| `customs.dutyValueTiers`, `customs.dutyPerCcByAge` | `law.tks.ru/document/833411` — Решение Совета ЕЭК № 107 от 20.12.2017, Прил. 2, Табл. 2 | The decree text itself, as real tables. 18 brackets. |
+| `customs.dutyValueTiers`, `customs.dutyPerCcByAge` | `law.tks.ru/document/833411` — Решение Совета ЕЭК № 107 от 20.12.2017, Прил. 2, Табл. 2 | The decree text itself, as real tables. Three bands of 6 brackets. |
 | same, cross-check | `www.tks.ru/auto/2000000008/` — ASCII pseudo-tables | The operator's own reference. Disagreement between the two is reported as a finding in its own right. |
-| `customs.clearanceFeeBrackets` | `law.tks.ru/document/778729` — ПП РФ № 1637 от 28.11.2024 в ред. № 1638 | The decree text, as prose. 8 brackets. |
+| `customs.clearanceFeeBrackets` | `law.tks.ru/document/778729` — ПП РФ № 1637 от 28.11.2024 в ред. № 1638 | The decree text, as prose. 8 brackets, bounded by the export paragraph. |
 
 **`www.tks.ru/auto/2000000008/` is never read for the clearance fee.** It still
 prints the grid of ПП № 342, superseded twice over (775 … 30 000 ₽). It parses
@@ -73,13 +73,33 @@ a watch that quietly reads the wrong law.
 |---|---|---|---|
 | `ok` | 0 | nothing | every watch parsed, everything matched |
 | `changed` | 0 | the observation block is rewritten and a PR opens | a number moved, a decree landed, or a pin went stale |
-| `broken` | 1 | the job goes red; nothing is written | a fetch failed or an extractor found fewer rows than the source carries |
+| `broken` | 1 | the job goes red; nothing is written | a fetch failed, or a band's bracket count left the 4-10 range a trustworthy reading falls in |
 
 `broken` exists because an extractor that matched nothing and a config that is
-correct both produce "0 differences". Every extractor declares how many rows its
-source is known to carry, and finding fewer is a failure, not a clean run. A
-broken run also leaves the observation block untouched, so a rotted scraper can
-never overwrite the last known-good reading with an empty one.
+correct both produce "0 differences".
+
+Each band of brackets must land inside a trustworthy RANGE, not merely above a
+floor. A floor on the total was one-sided and easy to trip over: a page that
+appends a historical scale reads twice the tiers and still clears "at least
+18", and a page that loses one section header reads 6 + 12 + 0 and clears it
+too — both then compare numbers taken from the wrong table and propose them to
+a human as a change. The range is deliberately wide, because a law that
+genuinely adds a bracket must arrive as a proposal, not as a red build.
+
+A broken run also leaves the observation block untouched, so a rotted scraper
+can never overwrite the last known-good reading with an empty one.
+
+## The observation block advances on clean runs too
+
+The feed watch dedupes against the block and measures the window it has already
+read, so the baseline has to keep moving. If it only advanced when a human
+merged a proposal, a quiet stretch longer than the feed's ~7-week page would
+make every run claim a skipped window, and the only way to silence it would be
+merging an otherwise empty pull request. A clean run therefore records its
+reading straight to `main` — one bot-authored log line in this file, carrying no
+tariff decision. That push is best-effort: if it fails, the watch is still
+correct, it just compares against an older baseline and may re-report a decree
+it has already seen. Re-reporting is the safe direction; missing one is not.
 
 ## Running it by hand
 

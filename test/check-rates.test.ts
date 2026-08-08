@@ -11,8 +11,9 @@
  * the decree that states its scale three times over. No test touches the
  * network: every run is driven through an injected fetch.
  */
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -27,7 +28,9 @@ import {
   compareDuty,
   compareSources,
   decodeBody,
+  BAND_BOUNDS,
   isSupersededEdition,
+  main,
   matchAuthorityItems,
   parseAuthorityFeed,
   parseClearanceFromLaw,
@@ -94,6 +97,9 @@ function healthyBodies(): Record<string, string> {
 
 /** `asOf` is 2026-01-01, so any clock inside 2026 leaves it fresh. */
 const NOW = new Date("2026-08-08T00:00:00Z");
+
+/** The retry backoff is real time; the suite must not wait on it. */
+const NO_SLEEP = async () => {};
 
 describe("decodeBody", () => {
   it("decodes windows-1251 when the server says so", () => {
@@ -215,9 +221,14 @@ describe("clearance-fee extractor", () => {
   });
 
   it("stops at the export paragraph instead of eating the whole decree", () => {
-    // The decree states its scale several times over — for exports and inside
-    // its appendices. Reading the whole page found 25 clauses where the config
-    // has 8 brackets, and the extra 17 price cargo this widget never quotes.
+    // The decree states its scale several times over — for exports, and again
+    // for undeclared value. Reading the whole page found 25 clauses where the
+    // config has 8 brackets, and the extra ones price cargo this widget never
+    // quotes. The fixture deliberately carries the export scale (1067, 2134,
+    // …) and the 9054 clause after it, so this assertion fails if the boundary
+    // ever stops being enforced.
+    expect(CLEARANCE).toContain("1067 рублей - за таможенные операции");
+    expect(CLEARANCE).toContain("9054 рубля");
     expect(observed.map((bracket) => bracket.fee)).toEqual([
       1231, 2462, 4924, 13541, 18465, 21344, 49240, 73860,
     ]);
@@ -336,10 +347,13 @@ describe("authority feed", () => {
   });
 
   it("ignores today's ordinary decrees", () => {
-    const matches = matchAuthorityItems(
-      items.filter((item) => !/утилизацион/i.test(item.title)),
-    );
-    expect(matches.every((match) => match.decrees.length > 0)).toBe(true);
+    // Ten real feed items, 140 of which were amendments on the captured day —
+    // none of them touch a decree this config depends on. Asserting the empty
+    // result directly: `matches.every(...)` on an empty array is vacuously
+    // true and would pass however badly the matcher behaved.
+    expect(items.length).toBeGreaterThanOrEqual(5);
+    expect(items.some((item) => /внесени\S* изменен/i.test(item.title))).toBe(true);
+    expect(matchAuthorityItems(items)).toEqual([]);
   });
 });
 
@@ -355,13 +369,24 @@ describe("asOf staleness — the backstop for the unwatched recycling fee", () =
     expect(findings[0]!.message).toContain("2026-01-01");
   });
 
-  it("uses the previous 1 January before this year's has arrived", () => {
-    // On 2026-01-01 itself the boundary is that day, not next year's.
-    expect(checkAsOfStaleness({ asOf: "2026-01-01" }, new Date("2026-01-01T00:00:00Z")))
-      .toEqual([]);
+  it("treats 1 January itself as fresh, and 31 December of the year before as not", () => {
+    // The boundary is inclusive on its own day, and the year it belongs to is
+    // always the clock's own year — a date is never before 1 January of its
+    // own year, which is why the "fall back to last year" branch this test
+    // used to exercise was unreachable and has been removed.
     expect(
-      checkAsOfStaleness({ asOf: "2025-06-01" }, new Date("2025-12-31T00:00:00Z")),
+      checkAsOfStaleness({ asOf: "2026-01-01" }, new Date("2026-01-01T00:00:00Z")),
     ).toEqual([]);
+    expect(
+      checkAsOfStaleness({ asOf: "2025-12-31" }, new Date("2026-01-01T00:00:00Z")),
+    ).toHaveLength(1);
+  });
+
+  it("treats a future asOf as broken, not as permanently fresh", () => {
+    // "2036-01-01" clears every boundary forever and would quietly switch off
+    // the only backstop the recycling fee has.
+    const findings = checkAsOfStaleness({ asOf: "2036-01-01" }, NOW);
+    expect(findings[0]!.kind).toBe("broken");
   });
 
   it("treats an unparseable asOf as broken, not as fresh", () => {
@@ -385,6 +410,7 @@ describe("runWatches", () => {
       config: DEFAULT_CONFIG,
       fetchImpl: fetchFrom(healthyBodies()),
       now: NOW,
+      sleep: NO_SLEEP,
     });
     expect(report.outcome).toBe("ok");
     expect(report.watches.flatMap((watch) => watch.findings)).toEqual([]);
@@ -399,6 +425,7 @@ describe("runWatches", () => {
       config: DEFAULT_CONFIG,
       fetchImpl: fetchFrom(bodies),
       now: NOW,
+      sleep: NO_SLEEP,
     });
     expect(report.outcome).toBe("broken");
     const duty = report.watches.find((watch) => watch.id === "duty-eek107");
@@ -406,7 +433,11 @@ describe("runWatches", () => {
     expect(duty!.findings[0]!.message).toContain("NOT checked");
   });
 
-  it("is broken when the clearance prose loses a bracket", async () => {
+  it("proposes — does not break — when the clearance scale loses one bracket", async () => {
+    // Deliberate: a law that drops or adds a bracket is a real change a human
+    // must read, so it stays inside the trustworthy band and surfaces as a
+    // proposal. Only counts no amendment would produce mean the parse itself
+    // stopped working (the next test).
     const bodies = healthyBodies();
     bodies[LIVE_URLS.clearance] = CLEARANCE.replace(
       /73860 рублей - за таможенные операции/,
@@ -416,8 +447,130 @@ describe("runWatches", () => {
       config: DEFAULT_CONFIG,
       fetchImpl: fetchFrom(bodies),
       now: NOW,
+      sleep: NO_SLEEP,
+    });
+    expect(report.outcome).toBe("changed");
+    expect(
+      report.watches
+        .flatMap((watch) => watch.findings)
+        .some((item) => item.message.includes("7 brackets")),
+    ).toBe(true);
+  });
+
+  it("is broken when the clearance clause has no terminator to bound it", async () => {
+    // Without "В отношении вывозимых" the clause runs to the end of the page
+    // and swallows the export scale and the appendices — 25 clauses, which
+    // clears any floor while comparing the wrong rates.
+    const bodies = healthyBodies();
+    bodies[LIVE_URLS.clearance] = CLEARANCE.replace(
+      "В отношении вывозимых",
+      "Касательно вывозимых",
+    );
+    const report = await runWatches({
+      config: DEFAULT_CONFIG,
+      fetchImpl: fetchFrom(bodies),
+      now: NOW,
+      sleep: NO_SLEEP,
     });
     expect(report.outcome).toBe("broken");
+  });
+
+  it("is broken when a page appends a second, historical duty scale", async () => {
+    // A floor on the SUM of all three bands passed this: 12 + 6 + 6 = 24 rows
+    // clears "at least 18" while the value tiers come from two tables at once.
+    const bodies = healthyBodies();
+    const tiers = DUTY_LAW.slice(
+      DUTY_LAW.indexOf("<tr"),
+      DUTY_LAW.indexOf("прошло более 3 лет"),
+    );
+    bodies[LIVE_URLS.duty] = DUTY_LAW.replace(
+      "<tr",
+      `${tiers}<tr`,
+    );
+    const report = await runWatches({
+      config: DEFAULT_CONFIG,
+      fetchImpl: fetchFrom(bodies),
+      now: NOW,
+      sleep: NO_SLEEP,
+    });
+    expect(report.outcome).toBe("broken");
+  });
+
+  it("is broken when the decree feed keeps its shape but loses its fields", async () => {
+    // parseAuthorityFeed coerces a missing field to "": a renamed complexName
+    // would otherwise give 200 well-formed items with empty titles, zero
+    // matches, and a green run with both утильсбор signals dead.
+    const feed = JSON.parse(FEED) as { items: Record<string, unknown>[] };
+    for (const item of feed.items) {
+      delete item["complexName"];
+      delete item["name"];
+    }
+    const bodies = healthyBodies();
+    bodies[LIVE_URLS.feed] = JSON.stringify(feed);
+    const report = await runWatches({
+      config: DEFAULT_CONFIG,
+      fetchImpl: fetchFrom(bodies),
+      now: NOW,
+      sleep: NO_SLEEP,
+    });
+    expect(report.outcome).toBe("broken");
+  });
+
+  it("does not let the duty cross-check read a missing primary as agreement", async () => {
+    const bodies = healthyBodies();
+    bodies[LIVE_URLS.duty] = "<html><body>под реконструкцией</body></html>";
+    const report = await runWatches({
+      config: DEFAULT_CONFIG,
+      fetchImpl: fetchFrom(bodies),
+      now: NOW,
+      sleep: NO_SLEEP,
+    });
+    const cross = report.watches.find((watch) => watch.id === "duty-tks-auto");
+    expect(cross!.outcome).toBe("broken");
+  });
+
+  it("retries once before calling a source unreadable", async () => {
+    let attempts = 0;
+    const bodies = healthyBodies();
+    const inner = fetchFrom(bodies);
+    const flaky = async (url: string, options?: unknown) => {
+      if (url === LIVE_URLS.clearance) {
+        attempts += 1;
+        if (attempts === 1) throw new Error("ECONNRESET");
+      }
+      return inner(url, options);
+    };
+    const report = await runWatches({
+      config: DEFAULT_CONFIG,
+      fetchImpl: flaky,
+      now: NOW,
+      sleep: NO_SLEEP,
+    });
+    // A lone transient failure from a legacy portal is not a finding: a job
+    // that goes red for nothing trains its reader to ignore it.
+    expect(attempts).toBe(2);
+    expect(report.outcome).toBe("ok");
+  });
+
+  it("reports a parse crash as a parse crash, not as a failed fetch", async () => {
+    const report = await runWatches({
+      config: DEFAULT_CONFIG,
+      fetchImpl: fetchFrom(healthyBodies()),
+      now: NOW,
+      sleep: NO_SLEEP,
+      watches: [
+        {
+          id: "exploding",
+          url: LIVE_URLS.clearance,
+          what: "a watch whose extractor throws",
+          run: () => {
+            throw new TypeError("cannot read properties of undefined");
+          },
+        },
+      ],
+    });
+    expect(report.outcome).toBe("broken");
+    expect(report.watches[0]!.findings[0]!.message).toContain("could not interpret");
   });
 
   it("is broken on a failed fetch, and the other watches still run", async () => {
@@ -427,6 +580,7 @@ describe("runWatches", () => {
       config: DEFAULT_CONFIG,
       fetchImpl: fetchFrom(bodies),
       now: NOW,
+      sleep: NO_SLEEP,
     });
     expect(report.outcome).toBe("broken");
     expect(report.watches.find((watch) => watch.id === "duty-eek107")!.outcome).toBe(
@@ -444,6 +598,7 @@ describe("runWatches", () => {
         arrayBuffer: async () => new ArrayBuffer(0),
       }),
       now: NOW,
+      sleep: NO_SLEEP,
     });
     expect(report.outcome).toBe("broken");
     expect(report.watches.every((watch) => watch.outcome === "broken")).toBe(true);
@@ -456,6 +611,7 @@ describe("runWatches", () => {
       config: DEFAULT_CONFIG,
       fetchImpl: fetchFrom(bodies),
       now: NOW,
+      sleep: NO_SLEEP,
     });
     expect(report.outcome).toBe("changed");
     const finding = report.watches
@@ -471,6 +627,7 @@ describe("runWatches", () => {
       config: DEFAULT_CONFIG,
       fetchImpl: fetchFrom(bodies),
       now: NOW,
+      sleep: NO_SLEEP,
     });
     expect(report.outcome).toBe("changed");
     const finding = report.watches
@@ -496,6 +653,7 @@ describe("runWatches", () => {
       config: DEFAULT_CONFIG,
       fetchImpl: fetchFrom(bodies),
       now: NOW,
+      sleep: NO_SLEEP,
     });
     expect(first.outcome).toBe("changed");
     expect(
@@ -508,6 +666,7 @@ describe("runWatches", () => {
       config: DEFAULT_CONFIG,
       fetchImpl: fetchFrom(bodies),
       now: NOW,
+      sleep: NO_SLEEP,
       previousObservations: first.observations,
     });
     expect(second.outcome).toBe("ok");
@@ -520,6 +679,7 @@ describe("runWatches", () => {
       config: DEFAULT_CONFIG,
       fetchImpl: fetchFrom(healthyBodies()),
       now: NOW,
+      sleep: NO_SLEEP,
       previousObservations: { "authority-feed": { watermark: "2020-01-01", seen: [] } },
     });
     expect(report.outcome).toBe("changed");
@@ -539,6 +699,7 @@ describe("runWatches", () => {
       config: stale,
       fetchImpl: fetchFrom(healthyBodies()),
       now: NOW,
+      sleep: NO_SLEEP,
     });
     expect(report.outcome).toBe("changed");
     expect(report.watches.find((watch) => watch.id === "asof-staleness")).toBeDefined();
@@ -553,6 +714,7 @@ describe("renderReport", () => {
       config: DEFAULT_CONFIG,
       fetchImpl: fetchFrom(bodies),
       now: NOW,
+      sleep: NO_SLEEP,
     });
     const body = renderReport(report);
     expect(body).toContain("customs.clearanceFeeBrackets[0].fee");
@@ -568,6 +730,7 @@ describe("renderReport", () => {
       config: DEFAULT_CONFIG,
       fetchImpl: fetchFrom(healthyBodies()),
       now: NOW,
+      sleep: NO_SLEEP,
     });
     expect(renderReport(report)).toContain(RECYCLING_GAP_NOTE);
   });
@@ -579,6 +742,7 @@ describe("renderReport", () => {
         throw new Error("network down");
       },
       now: NOW,
+      sleep: NO_SLEEP,
     });
     const body = renderReport(report);
     expect(body).toContain("BROKEN");
@@ -656,6 +820,13 @@ describe("the shipped source map", () => {
     expect(() => writeObservationBlock(map, {}, "2026-08-08")).not.toThrow();
   });
 
+  it("states the bracket range the code actually enforces", () => {
+    // The doc is what the next reader trusts. If the bounds move in the code
+    // and not here, the file starts describing a watch that no longer exists.
+    const map = readFileSync(resolve("docs/harness/rates-source.md"), "utf8");
+    expect(map).toContain(`${BAND_BOUNDS.min}-${BAND_BOUNDS.max}`);
+  });
+
   it("names every url the watches actually fetch", () => {
     // A source map that drifts from the code is worse than none: the next
     // reader would re-pin the wrong page.
@@ -663,5 +834,101 @@ describe("the shipped source map", () => {
     for (const url of [LIVE_URLS.duty, LIVE_URLS.dutyCross, LIVE_URLS.clearance]) {
       expect(map).toContain(url.replace(/^https?:\/\//, ""));
     }
+  });
+});
+
+describe("main — the promise the script makes to CI", () => {
+  /** A throwaway repo root: config, source map, nothing else. */
+  function workspace(): string {
+    const dir = mkdtempSync(join(tmpdir(), "rates-watch-"));
+    mkdirSync(join(dir, "site"), { recursive: true });
+    mkdirSync(join(dir, "docs", "harness"), { recursive: true });
+    cpSync(resolve("site/config.json"), join(dir, "site/config.json"));
+    cpSync(resolve("docs/harness/rates-source.md"), join(dir, "docs/harness/rates-source.md"));
+    return dir;
+  }
+
+  const silent = () => {};
+
+  it("exits 0 and records the reading when everything matches", async () => {
+    const cwd = workspace();
+    const code = await main([], {
+      fetchImpl: fetchFrom(healthyBodies()),
+      cwd,
+      env: {},
+      log: silent,
+      sleep: NO_SLEEP,
+    });
+    expect(code).toBe(0);
+    // A clean run must persist too: the feed watch measures the window it has
+    // already seen, and a baseline that only moved on a merged proposal would
+    // make a quiet stretch look like a gap.
+    const written = readFileSync(join(cwd, "docs/harness/rates-source.md"), "utf8");
+    expect(readObservationBlock(written)["authority-feed"]).toBeDefined();
+  });
+
+  it("exits 1 and writes NOTHING when a source cannot be read", async () => {
+    const cwd = workspace();
+    const before = readFileSync(join(cwd, "docs/harness/rates-source.md"), "utf8");
+    const code = await main([], {
+      fetchImpl: async () => {
+        throw new Error("network down");
+      },
+      cwd,
+      env: {},
+      log: silent,
+      sleep: NO_SLEEP,
+    });
+    expect(code).toBe(1);
+    expect(readFileSync(join(cwd, "docs/harness/rates-source.md"), "utf8")).toBe(before);
+  });
+
+  it("writes nothing under --dry-run", async () => {
+    const cwd = workspace();
+    const before = readFileSync(join(cwd, "docs/harness/rates-source.md"), "utf8");
+    await main(["--dry-run"], {
+      fetchImpl: fetchFrom(healthyBodies()),
+      cwd,
+      env: {},
+      log: silent,
+      sleep: NO_SLEEP,
+    });
+    expect(readFileSync(join(cwd, "docs/harness/rates-source.md"), "utf8")).toBe(before);
+  });
+
+  it("writes the body file and the outcome the workflow branches on", async () => {
+    const cwd = workspace();
+    const bodyPath = join(cwd, "pr-body.md");
+    const outputPath = join(cwd, "gh-output.txt");
+    writeFileSync(outputPath, "", "utf8");
+    const bodies = healthyBodies();
+    bodies[LIVE_URLS.clearance] = CLEARANCE.replace("1231 рубль", "1300 рублей");
+    const code = await main(["--body", bodyPath], {
+      fetchImpl: fetchFrom(bodies),
+      cwd,
+      env: { GITHUB_OUTPUT: outputPath },
+      log: silent,
+      sleep: NO_SLEEP,
+    });
+    expect(code).toBe(0);
+    expect(readFileSync(outputPath, "utf8")).toContain("outcome=changed");
+    expect(readFileSync(bodyPath, "utf8")).toContain("customs.clearanceFeeBrackets[0].fee");
+  });
+
+  it("still writes a body when the config itself cannot be read", async () => {
+    // Without this the run dies before the body exists and the workflow's
+    // always() step cats nothing: a red build with no stated reason.
+    const cwd = workspace();
+    writeFileSync(join(cwd, "site/config.json"), "{ not json", "utf8");
+    const bodyPath = join(cwd, "pr-body.md");
+    const code = await main(["--body", bodyPath], {
+      fetchImpl: fetchFrom(healthyBodies()),
+      cwd,
+      env: {},
+      log: silent,
+      sleep: NO_SLEEP,
+    });
+    expect(code).toBe(1);
+    expect(readFileSync(bodyPath, "utf8")).toContain("could not start");
   });
 });

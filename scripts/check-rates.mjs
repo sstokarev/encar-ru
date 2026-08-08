@@ -70,6 +70,9 @@ export const OBSERVATIONS_END = "<!-- rates-watch:observations:end -->";
  */
 export const QUOTE_LIMIT = 400;
 
+/** GitHub refuses a pull-request body longer than this. */
+export const BODY_LIMIT = 60_000;
+
 /* ------------------------------------------------------------ decoding ---- */
 
 /**
@@ -190,18 +193,41 @@ export function isSupersededEdition(html) {
     return { superseded: false };
   }
   const link = /href=["']([^"']*\/document\/\d+[^"']*)["']/i.exec(banner[0]);
+  // The successor is pasted into a pull request as "re-pin it to X". An
+  // absolute href to another host inside that banner would turn the proposal
+  // into a link the reviewer has no reason to distrust, so anything off
+  // law.tks.ru is dropped rather than quoted.
+  let successor;
+  if (link) {
+    const resolved = new URL(link[1], "https://law.tks.ru");
+    if (resolved.host === "law.tks.ru") successor = resolved.toString();
+  }
   return {
     superseded: true,
-    successor: link ? new URL(link[1], "https://law.tks.ru").toString() : undefined,
+    successor,
     quote: clampQuote(
       (/Недействующая редакция[^.]*\./.exec(textOf(banner[0])) ?? [""])[0],
     ),
   };
 }
 
-/** Trims a quoted source line to QUOTE_LIMIT, marking the cut. */
+/**
+ * Trims a quoted source line to QUOTE_LIMIT and defuses its markdown.
+ *
+ * Quoted text comes from third-party pages and — for the decree feed —
+ * from PLAIN HTTP: https://publication.pravo.gov.ru does not answer (measured
+ * 2026-08-08, connect timeout), so the URL cannot simply be upgraded. That
+ * text lands verbatim in a pull-request body a human reads and trusts, where
+ * a `[click here](http://elsewhere)` or an image beacon would be rendered, not
+ * shown. Brackets and backticks are neutralised so a quote always reads as a
+ * quote.
+ */
 export function clampQuote(text) {
-  const line = text.replace(/\s+/g, " ").trim();
+  const line = text
+    .replace(/\s+/g, " ")
+    .replace(/[\u0000-\u001f]/g, "")
+    .replace(/[[\]`]/g, "'")
+    .trim();
   return line.length <= QUOTE_LIMIT ? line : `${line.slice(0, QUOTE_LIMIT)}…`;
 }
 
@@ -364,7 +390,11 @@ function clearanceImportClause(text) {
   if (start < 0) return "";
   const rest = text.slice(start);
   const end = rest.indexOf("В отношении вывозимых");
-  return end < 0 ? rest : rest.slice(0, end);
+  // No terminator means the clause cannot be bounded, and reading to the end of
+  // the page swallows the export scale and the appendices — 25 clauses, which
+  // still clears any floor. Returning nothing makes the watch say "broken",
+  // which is the true statement: this page was not checked.
+  return end < 0 ? "" : rest.slice(0, end);
 }
 
 /**
@@ -429,12 +459,20 @@ export const AUTHORITY_KEYWORD = /утилизацион/i;
 /** Normalised feed items; tolerates the portal's casing of the envelope. */
 export function parseAuthorityFeed(payload) {
   const items = payload?.items ?? payload?.Items ?? [];
-  return items.map((item) => ({
-    eoNumber: String(item.eoNumber ?? ""),
-    title: String(item.complexName ?? item.name ?? "").replace(/\s+/g, " ").trim(),
-    published: String(item.publishDateShort ?? "").slice(0, 10),
-    url: `http://publication.pravo.gov.ru/document/${String(item.eoNumber ?? "")}`,
-  }));
+  return items.map((item) => {
+    // The eoNumber becomes a link in a pull-request body, and the feed is read
+    // over plain HTTP (https on that host does not answer — measured
+    // 2026-08-08). Anything but digits is dropped rather than pasted into a URL.
+    const eoNumber = String(item.eoNumber ?? "").replace(/\D/g, "");
+    return {
+      eoNumber,
+      title: String(item.complexName ?? item.name ?? "").replace(/\s+/g, " ").trim(),
+      published: String(item.publishDateShort ?? "").slice(0, 10),
+      url: eoNumber
+        ? `http://publication.pravo.gov.ru/document/${eoNumber}`
+        : undefined,
+    };
+  });
 }
 
 /** Feed items that amend a watched decree, or that mention the fee by name. */
@@ -599,11 +637,19 @@ export function checkAsOfStaleness(customs, now) {
       }),
     ];
   }
-  const lastNewYear = Date.UTC(now.getUTCFullYear(), 0, 1);
-  const boundary =
-    now.getTime() >= lastNewYear
-      ? lastNewYear
-      : Date.UTC(now.getUTCFullYear() - 1, 0, 1);
+  // The most recent 1 January that has already happened. In UTC that is
+  // always this year's — a date is never before 1 January of its own year, so
+  // the "fall back to last year" branch this used to carry was unreachable.
+  const boundary = Date.UTC(now.getUTCFullYear(), 0, 1);
+  // A date in the future clears every boundary forever and would switch off
+  // the only backstop the recycling fee has. That is a config bug, not health.
+  if (asOf.getTime() > now.getTime()) {
+    return [
+      finding("broken", `customs.asOf is in the future: ${customs.asOf}`, {
+        configPath: "customs.asOf",
+      }),
+    ];
+  }
   if (asOf.getTime() >= boundary) return [];
   return [
     finding(
@@ -631,9 +677,45 @@ export const RECYCLING_GAP_NOTE =
   "re-derive the grid by hand.";
 
 /**
- * Every watch: where it reads, what it proves, and how many rows the source is
- * known to carry. `minRows` is what separates "the config matches" from "the
- * extractor found nothing".
+ * Bracket counts a trustworthy reading must fall inside, per BAND.
+ *
+ * A floor on the SUM was one-sided and cheap to defeat: a page that appends a
+ * historical scale reads 12 value tiers + 6 + 6 = 24 and clears "at least 18",
+ * while a page that loses one section header reads 6 + 12 + 0 and clears it
+ * too — both then compare numbers taken from the wrong table and report
+ * `changed`, which a human would accept. Per-band bounds catch both.
+ *
+ * The bounds are wide on purpose. A law that genuinely adds a bracket must
+ * still arrive as `changed` (a proposal a human reads), not as `broken` (a red
+ * build). Only counts no plausible amendment would produce mean the parse
+ * itself stopped being trustworthy.
+ */
+export const BAND_BOUNDS = { min: 4, max: 10 };
+
+/** A `broken` result when a band's count leaves the trustworthy range. */
+function bandOutOfRange(label, count) {
+  if (count >= BAND_BOUNDS.min && count <= BAND_BOUNDS.max) return undefined;
+  return finding(
+    "broken",
+    `${label}: read ${count} brackets, outside the ${BAND_BOUNDS.min}-${BAND_BOUNDS.max} ` +
+      "a trustworthy reading of this source falls in — the layout moved and " +
+      "the numbers were NOT checked",
+  );
+}
+
+/** Per-band checks for either duty extractor. */
+function dutyBandFindings(label, observed) {
+  return [
+    bandOutOfRange(`${label} value tiers`, observed.dutyValueTiers.length),
+    bandOutOfRange(`${label} 3-5y brackets`, observed.dutyPerCcByAge.y3.length),
+    bandOutOfRange(`${label} >5y brackets`, observed.dutyPerCcByAge.y5plus.length),
+  ].filter(Boolean);
+}
+
+/**
+ * Every watch: where it reads, what it proves, and the bracket counts a
+ * trustworthy reading falls inside. Those bounds are what separate "the config
+ * matches" from "the extractor read the wrong thing".
  */
 export function defaultWatches() {
   return [
@@ -644,22 +726,8 @@ export function defaultWatches() {
       kind: "html",
       run: ({ body, config }) => {
         const observed = parseDutyFromLawTables(body);
-        const rows =
-          observed.dutyValueTiers.length +
-          observed.dutyPerCcByAge.y3.length +
-          observed.dutyPerCcByAge.y5plus.length;
-        if (rows < 18) {
-          return {
-            outcome: "broken",
-            findings: [
-              finding(
-                "broken",
-                `duty extractor found ${rows} of the 18 expected brackets — ` +
-                  "the page layout moved, the numbers were NOT checked",
-              ),
-            ],
-          };
-        }
+        const broken = dutyBandFindings("duty", observed);
+        if (broken.length > 0) return { outcome: "broken", findings: broken };
         const edition = isSupersededEdition(body);
         const findings = compareDuty(observed, config.customs);
         if (edition.superseded) {
@@ -682,26 +750,28 @@ export function defaultWatches() {
       kind: "html",
       run: ({ body, previousWatches }) => {
         const observed = parseDutyFromPre(body);
-        const rows =
-          observed.dutyValueTiers.length +
-          observed.dutyPerCcByAge.y3.length +
-          observed.dutyPerCcByAge.y5plus.length;
-        if (rows < 18) {
+        const broken = dutyBandFindings("duty cross-check", observed);
+        if (broken.length > 0) return { outcome: "broken", findings: broken };
+        const primary = previousWatches?.["duty-eek107"]?.observed;
+        if (primary === undefined) {
+          // Nothing to cross-check against. Reporting "ok" here would make a
+          // missing dependency read as agreement between two sources, which is
+          // the most flattering possible lie about a watch that did not run.
           return {
             outcome: "broken",
             findings: [
               finding(
                 "broken",
-                `duty cross-check found ${rows} of the 18 expected brackets — ` +
-                  "the pseudo-table layout moved",
+                "the duty cross-check had no primary reading to compare with — " +
+                  "the decree watch did not produce one",
               ),
             ],
+            observed,
           };
         }
-        const primary = previousWatches?.["duty-eek107"]?.observed;
         // tks is the operator's reference and the decree is the authority:
         // a disagreement between them is itself worth reporting (brief).
-        const findings = primary ? compareSources(primary, observed) : [];
+        const findings = compareSources(primary, observed);
         return { outcome: findings.length > 0 ? "changed" : "ok", findings, observed };
       },
     },
@@ -712,18 +782,8 @@ export function defaultWatches() {
       kind: "html",
       run: ({ body, config }) => {
         const observed = parseClearanceFromLaw(body);
-        if (observed.length < 8) {
-          return {
-            outcome: "broken",
-            findings: [
-              finding(
-                "broken",
-                `clearance extractor found ${observed.length} of the 8 expected ` +
-                  "brackets — the decree's prose moved, the numbers were NOT checked",
-              ),
-            ],
-          };
-        }
+        const broken = bandOutOfRange("clearance fee", observed.length);
+        if (broken) return { outcome: "broken", findings: [broken] };
         const edition = isSupersededEdition(body);
         const findings = compareClearance(observed, config.customs);
         if (edition.superseded) {
@@ -746,15 +806,28 @@ export function defaultWatches() {
       kind: "json",
       run: ({ body, previousObservations }) => {
         const items = parseAuthorityFeed(JSON.parse(body));
-        if (items.length === 0) {
+        // Item COUNT is not enough. parseAuthorityFeed coerces a missing field
+        // to "", so a renamed `complexName` would yield 200 well-formed items
+        // with empty titles: no title matches anything, the watch reports "ok",
+        // the watermark becomes undefined, and both утильсбор signals die
+        // green. Usable items — a title and a date — are what was checked.
+        const usable = items.filter(
+          (item) => item.eoNumber && item.title && item.published,
+        );
+        if (usable.length === 0 || usable.length < items.length * 0.9) {
           return {
             outcome: "broken",
             findings: [
-              finding("broken", "the decree feed returned no items — it was NOT checked"),
+              finding(
+                "broken",
+                `the decree feed returned ${items.length} items but only ` +
+                  `${usable.length} carried a title and a date — its shape moved ` +
+                  "and it was NOT checked",
+              ),
             ],
           };
         }
-        const matches = matchAuthorityItems(items);
+        const matches = matchAuthorityItems(usable);
         const seen = new Set(previousObservations?.["authority-feed"]?.seen ?? []);
         const findings = [];
         for (const match of matches) {
@@ -772,10 +845,7 @@ export function defaultWatches() {
         // The feed's first page spans roughly seven weeks. If its oldest item
         // is newer than what we last recorded, the window moved past us and
         // "no new decrees" would be a lie rather than an observation.
-        const oldest = items
-          .map((item) => item.published)
-          .filter(Boolean)
-          .sort()[0];
+        const oldest = usable.map((item) => item.published).sort()[0];
         const watermark = previousObservations?.["authority-feed"]?.watermark;
         if (watermark && oldest && oldest > watermark) {
           findings.push(
@@ -790,7 +860,7 @@ export function defaultWatches() {
           outcome: findings.length > 0 ? "changed" : "ok",
           findings,
           observed: {
-            watermark: items.map((item) => item.published).filter(Boolean).sort().pop(),
+            watermark: usable.map((item) => item.published).sort().pop(),
             seen: matches.map((match) => match.eoNumber),
             matched: matches.length,
           },
@@ -801,6 +871,45 @@ export function defaultWatches() {
 }
 
 /* ---------------------------------------------------------------- runner --- */
+
+/** How long a single source may take before the run gives up on it. */
+export const FETCH_TIMEOUT_MS = 30_000;
+
+/** One retry, because these are legacy portals and a lone 5xx is not news. */
+const FETCH_ATTEMPTS = 2;
+const RETRY_DELAY_MS = 3_000;
+
+/**
+ * Fetches a source, decoded with the charset the server declared.
+ *
+ * Two guards, both learned from what this job runs against. A TIMEOUT, because
+ * a hung legacy portal would otherwise hold the weekly slot for the six hours
+ * Actions allows and queue the next run behind it. A single RETRY, because a
+ * lone transient 5xx from a government portal is not a finding — and a job
+ * that goes red every few weeks for nothing trains its reader to ignore it,
+ * which is exactly how a real change gets missed.
+ */
+async function fetchWithRetry(fetchImpl, url, sleep = defaultSleep) {
+  let lastError;
+  for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetchImpl(url, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const buffer = await response.arrayBuffer();
+      return decodeBody(buffer, response.headers?.get?.("content-type") ?? "");
+    } catch (error) {
+      lastError = error;
+      if (attempt < FETCH_ATTEMPTS) await sleep(RETRY_DELAY_MS);
+    }
+  }
+  throw lastError;
+}
+
+function defaultSleep(ms) {
+  return new Promise((done) => setTimeout(done, ms));
+}
 
 const WORSE = { ok: 0, changed: 1, broken: 2 };
 
@@ -819,6 +928,8 @@ export async function runWatches({
   now = new Date(),
   watches = defaultWatches(),
   previousObservations = {},
+  // Injectable so the suite can exercise the retry path without waiting on it.
+  sleep = defaultSleep,
 }) {
   const results = [];
   const observations = {};
@@ -827,21 +938,14 @@ export async function runWatches({
 
   for (const watch of watches) {
     let result;
+    // Reading the source and interpreting it are separate failures, and saying
+    // "could not read <url>" for a TypeError inside an extractor sends the next
+    // reader to check the network when the bug is in this file.
+    let body;
     try {
-      const response = await fetchImpl(watch.url);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const buffer = await response.arrayBuffer();
-      const body = decodeBody(buffer, response.headers?.get?.("content-type") ?? "");
-      result = watch.run({
-        body,
-        config,
-        now,
-        previousObservations,
-        previousWatches: byId,
-      });
+      body = await fetchWithRetry(fetchImpl, watch.url, sleep);
     } catch (error) {
+      body = undefined;
       result = {
         outcome: "broken",
         findings: [
@@ -853,6 +957,28 @@ export async function runWatches({
           ),
         ],
       };
+    }
+    if (body !== undefined) {
+      try {
+        result = watch.run({
+          body,
+          config,
+          now,
+          previousObservations,
+          previousWatches: byId,
+        });
+      } catch (error) {
+        result = {
+          outcome: "broken",
+          findings: [
+            finding(
+              "broken",
+              `${watch.id}: read ${watch.url} but could not interpret it — ` +
+                `${String(error?.message ?? error)}`,
+            ),
+          ],
+        };
+      }
     }
     byId[watch.id] = result;
     if (result.observed !== undefined) observations[watch.id] = result.observed;
@@ -928,7 +1054,12 @@ export function renderReport(report) {
     ),
     "",
   );
-  return lines.join("\n");
+  const body = lines.join("\n");
+  // GitHub refuses a pull-request body over 65536 characters. A source that
+  // reformats can produce a finding per bracket; truncating loudly beats an
+  // API error that loses the whole proposal.
+  if (body.length <= BODY_LIMIT) return body;
+  return `${body.slice(0, BODY_LIMIT)}\n\n_(report truncated at ${BODY_LIMIT} characters)_`;
 }
 
 /**
@@ -970,37 +1101,85 @@ export function readObservationBlock(markdown) {
 
 /* -------------------------------------------------------------------- cli -- */
 
-async function main(argv) {
+/**
+ * Reads the config and the source map, runs every watch, prints the report,
+ * and — unless the run is broken — records what was observed.
+ *
+ * Exported for the suite: the promise this script makes is about PROCESS
+ * behaviour (exit 1, write nothing), and testing `runWatches` alone leaves
+ * exactly that promise unproven.
+ */
+export async function main(argv, deps = {}) {
+  const {
+    fetchImpl = (url, options) =>
+      fetch(url, { ...options, headers: { "user-agent": "encar-ru rates-watch" } }),
+    cwd = root,
+    env = process.env,
+    log = console.log,
+    sleep,
+  } = deps;
   const dryRun = argv.includes("--dry-run");
   const bodyIndex = argv.indexOf("--body");
   const bodyPath = bodyIndex >= 0 ? argv[bodyIndex + 1] : undefined;
 
-  const config = JSON.parse(readFileSync(resolve(root, CONFIG_PATH), "utf8"));
-  const sourceMapPath = resolve(root, SOURCE_MAP_PATH);
-  const sourceMap = readFileSync(sourceMapPath, "utf8");
-
-  const report = await runWatches({
-    config,
-    fetchImpl: (url) => fetch(url, { headers: { "user-agent": "encar-ru rates-watch" } }),
-    previousObservations: readObservationBlock(sourceMap),
-  });
+  const sourceMapPath = resolve(cwd, SOURCE_MAP_PATH);
+  let report;
+  try {
+    const config = JSON.parse(readFileSync(resolve(cwd, CONFIG_PATH), "utf8"));
+    const sourceMap = readFileSync(sourceMapPath, "utf8");
+    report = await runWatches({
+      config,
+      fetchImpl,
+      previousObservations: readObservationBlock(sourceMap),
+      ...(sleep ? { sleep } : {}),
+    });
+  } catch (error) {
+    // Reading the config or the source map failed. Without this the run dies
+    // before the body file exists, and the workflow's `if: always()` report
+    // step cats nothing — a red build with no stated reason.
+    report = {
+      outcome: "broken",
+      checkedAt: new Date().toISOString(),
+      observations: {},
+      watches: [
+        {
+          id: "setup",
+          url: CONFIG_PATH,
+          what: "reading the config and the source map",
+          outcome: "broken",
+          findings: [
+            finding("broken", `could not start: ${String(error?.message ?? error)}`),
+          ],
+        },
+      ],
+    };
+  }
 
   const rendered = renderReport(report);
-  console.log(rendered);
+  log(rendered);
   if (bodyPath) writeFileSync(bodyPath, `${rendered}\n`, "utf8");
-  if (process.env["GITHUB_OUTPUT"]) {
-    writeFileSync(process.env["GITHUB_OUTPUT"], `outcome=${report.outcome}\n`, {
-      flag: "a",
-    });
+  if (env["GITHUB_OUTPUT"]) {
+    writeFileSync(env["GITHUB_OUTPUT"], `outcome=${report.outcome}\n`, { flag: "a" });
   }
 
   // A broken run writes nothing: it must never overwrite the last known-good
   // observation with an empty one.
   if (report.outcome === "broken") return 1;
-  if (report.outcome === "changed" && !dryRun) {
+  if (!dryRun) {
+    // Written on a CLEAN run too, not only on a change. The feed watch dedupes
+    // against this block and measures the window it has already seen; if the
+    // baseline only advanced when a proposal was merged, a quiet stretch longer
+    // than the feed's ~7-week page would make the watch report a skipped window
+    // every week, and the only way to silence it would be merging an otherwise
+    // empty PR. The workflow commits a clean-run update straight to main — it
+    // is this job's own log line, not a tariff decision.
     writeFileSync(
       sourceMapPath,
-      writeObservationBlock(sourceMap, report.observations, report.checkedAt),
+      writeObservationBlock(
+        readFileSync(sourceMapPath, "utf8"),
+        report.observations,
+        report.checkedAt,
+      ),
       "utf8",
     );
   }
