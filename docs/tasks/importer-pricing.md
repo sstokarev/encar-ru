@@ -3,7 +3,7 @@ branch = "task/importer-pricing"
 worktree = "/Users/stokarev/orca/workspaces/encar-ru/importer-pricing"
 size = "normal"
 size_why = "four cost lines plus an FX rule; the model is given, the shape in code is the worker's"
-owns = ["site/config.json", "src/config.default.ts", "src/calc/pricing.ts", "test/pricing.test.ts", "src/page/main.ts", "test/page.test.ts"]
+owns = ["site/config.json", "src/config.default.ts", "src/calc/pricing.ts", "test/pricing.test.ts", "src/page/main.ts", "test/page.test.ts", "src/config.ts", "test/config-file.test.ts", "site/calc.html", "tsconfig.json"]
 reads = ["src/calc/customs.ts", "src/page/render.ts", "docs/harness/pipeline.md"]
 accepts = ["operator opens the calc page on a live lot (42217972 / 42319113 / 42512433, his pick) and every cost line carries a number with the CBR footnote visible"]
 after = []
@@ -39,6 +39,39 @@ Lot 41599967 is DEAD (404, confirmed 2026-08-08) - his quote is a sold car,
 so it lives on only as a fixture test that must reproduce 5,045,020 to the
 ruble; the live accept uses a fresh lot. His EUR is the CBR rate of the quote
 date (88.5259 on 15.07.2026) and his single duty line already contains the
-clearance fee - decomposition closes to 43 RUB at 1984 cc. Keep the
+clearance fee - decomposition closes to 43 RUB at 1984 cc. Two rules settled after dispatch (2026-08-08): computed tariff lines are
+rounded UP to the nearest 100 RUB (operator: «мы округляем вверх до нулей»;
+2 326 157 -> 2 326 200 is his own figure, and with it the quote reproduces
+5 045 020 exactly), and the commission ladder brackets on the subtotal
+BEFORE commission - bracketing on the final total is self-referential near
+a boundary and worth 25 000 RUB in that band.
+
+Keep the
 engine's honesty rules (dash / floor / «по запросу») intact for lots his
 model cannot price.
+
+## Round 2 (2026-08-08, after the first worker_done)
+
+The model is accepted; four things stand between the branch and its PR. The
+acceptance timeout was the ARCHITECT's failure, not the worker's: the ask was
+answered with a separate `send`, which does not release a blocking ask.
+Reporting `--outcome failed` instead of claiming a PR was correct.
+
+1. Operator, looking at the page: «округление убери и просто зашей молча в
+   цену». Delete the visible «Округление тарифа (вверх до 100 ₽)» row. The
+   RULE stays — tariffs still round up to 100 and the 5 045 020 pin must hold
+   — it is absorbed into the tariff line, not shown.
+2. `CONFIG_URL` (src/config.ts:44) makes acceptance impossible: the page
+   fetches the PRODUCTION config wherever it is served from, so the operator
+   saw the new bundle against the old published config («СБКТС и ЭПТС»,
+   «Брокер и СВХ» dashed — items the new config does not contain). A page
+   served from the same origin as its own config.json uses that one, falling
+   back to CONFIG_URL; the widget, injected into encar.com, MUST keep the
+   absolute URL. Pin both halves with a test.
+3. Proposal `config-validator-uses-array-builtins`: TAKEN. Replace the
+   `.every(...)` at src/config.ts:131 with a plain `for-of` — the encar host
+   page replaces Array built-ins, measured 2026-08-02.
+4. Proposal `tsc-lib-es2022`: TAKEN. Bump `lib` to es2022 in tsconfig.json.
+
+Do not wait on an acceptance timer: finish, push, `worker_done`. The architect
+serves the page to the operator and carries the verdict back as a new dispatch.
