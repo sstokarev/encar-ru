@@ -21,8 +21,13 @@
 
   /* Форма: та же разметка, что в site/calc.html — её ищет initCalcPage. */
   form[data-calc-form]{display:flex;flex-wrap:wrap;gap:10px}
-  input[data-calc-url]{flex:1 1 240px;min-height:44px;box-sizing:border-box;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font:1rem inherit;font-family:inherit}
-  button[data-calc-submit]{flex:1 1 140px;min-height:44px;padding:12px 20px;border:0;border-radius:8px;background:#c00;color:#fff;font:600 1rem inherit;font-family:inherit;cursor:pointer}
+  /* font-size отдельным свойством, а не шорткатом: `font:1rem inherit` —
+     невалидное объявление (шорткат требует семейство, а inherit допустим
+     только как значение целиком), парсер его выбрасывает и поле уезжает на
+     ~13px. На iOS Safari всё, что мельче 16px, при фокусе зумит страницу —
+     ровно на телефоне, ради которого страница и сделана. */
+  input[data-calc-url]{flex:1 1 240px;min-height:44px;box-sizing:border-box;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:1rem;font-family:inherit}
+  button[data-calc-submit]{flex:1 1 140px;min-height:44px;padding:12px 20px;border:0;border-radius:8px;background:#c00;color:#fff;font-size:1rem;font-weight:600;font-family:inherit;cursor:pointer}
   button[data-calc-submit]:disabled{opacity:.6;cursor:progress}
 
   /* Ниже — селекторы вывода src/page/render.ts, скопированы из site/calc.html:
@@ -52,8 +57,11 @@
   [data-messenger-button]{display:flex;align-items:center;justify-content:center;min-height:50px;padding:12px 16px;border-radius:8px;background:#c00;color:#fff;font-weight:600;text-align:center;text-decoration:none}
 
   /* Пояснение к черновику имеет смысл только рядом с кнопкой мессенджера,
-     а её рисует калькулятор: до первого расчёта строка скрыта. */
+     а её рисует калькулятор. Первое правило (до первого расчёта) понимают все
+     браузеры; второе точнее — прячет строку ещё и во время загрузки и на
+     карточке ошибки, где кнопки тоже нет. */
   [data-calc-result]:empty + .draft-note{display:none}
+  [data-calc-result]:not(:has([data-messenger-button])) + .draft-note{display:none}
   .draft-note{color:#666;font-size:.9rem;margin:8px 0 0}
 </style>
 </head>

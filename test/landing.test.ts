@@ -181,6 +181,43 @@ describe("landing page copy", () => {
     expect(link).not.toBeNull();
     expect(link?.textContent).toContain("Telegram");
   });
+
+  it("keeps the footer address in step with the config it duplicates", () => {
+    // The footer link fires before any config load, so its address is written
+    // into the HTML. That copy can drift: this pins it to the shipped config
+    // so a changed handle cannot leave cold traffic on a dead one.
+    const site = JSON.parse(
+      readFileSync(resolve("site/config.json"), "utf8"),
+    ) as { messenger: { address: string } };
+    const href = parsedPage()
+      .querySelector<HTMLAnchorElement>('a[href*="t.me/"]')
+      ?.getAttribute("href");
+    expect(href).toBe(`https://t.me/${site.messenger.address}`);
+    expect(site.messenger.address).toBe(DEFAULT_CONFIG.messenger.address);
+  });
+
+  it("mentions every cost line the config prices", () => {
+    // The prose claims the total is all-in. If a cost item is ever added to
+    // the config, this fails until the paragraph names it too — the page must
+    // not quietly stop describing something the client is charged for.
+    const site = JSON.parse(
+      readFileSync(resolve("site/config.json"), "utf8"),
+    ) as { costItems: { id: string }[] };
+    const wordFor: Readonly<Record<string, string>> = {
+      shipping: "фрахт",
+      customs: "пошлина",
+      sbkts: "СБКТС",
+      broker: "брокер",
+      commission: "комиссия",
+    };
+    const body = text().toLowerCase();
+    for (const item of site.costItems) {
+      const word = wordFor[item.id];
+      expect(word, `no landing copy pinned for cost item "${item.id}"`)
+        .toBeDefined();
+      expect(body, item.id).toContain((word as string).toLowerCase());
+    }
+  });
 });
 
 describe("landing page calculator", () => {
