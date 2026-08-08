@@ -56,6 +56,10 @@ const REMOTE_CONFIG: WidgetConfig = {
   },
   costItems: [
     { id: "shipping", label: "Доставка", kind: "fixed", value: 100000 },
+    // A config without a customs item is now refused outright (src/config.ts):
+    // with every other line priced it would quote a car with no duty at all and
+    // report it as "exact". Even a stub config has to carry one.
+    { id: "customs", label: "Таможенные платежи", kind: "formula", value: "customs_v1" },
   ],
   customs: DEFAULT_CONFIG.customs,
   commissionNote: "Тестовая заметка.",
@@ -712,7 +716,7 @@ describe("detail-page control (layout + encar styling)", () => {
     expect(toggleValue(host)).toBe(
       badge.shadowRoot?.querySelector("span")?.textContent,
     );
-    expect(toggleValue(host)).toBe("429 500 ₽");
+    expect(toggleValue(host)).toBe("от 1 403 040 ₽");
     // No second "Расчёт" pill next to the number.
     expect(toggle.textContent).not.toContain("Расчёт");
     expect(toggle.querySelector("[data-chevron]")).not.toBeNull();
@@ -919,12 +923,14 @@ describe("integration with the widget entry point", () => {
     });
     const host = breakdownHost()!;
     toggleOf(host).click();
-    // 6,590,000 KRW * 0.05 = 329,500 lot. U7 extracts full card params, so
-    // the total is exact; REMOTE_CONFIG has no formula item, hence only the
-    // lot and shipping rows: 329,500 + 100,000 = 429,500.
+    // 6,590,000 KRW * 0.05 = 329,500 lot + shipping 100,000. REMOTE_CONFIG now
+    // must carry a customs item (a config without one is refused), so U7's card
+    // params add duty 4.8 EUR/cc * 2199 cc * 92 = 971,078 and clearance 2,462:
+    // 1,403,040. A card publishes no engine power, so the recycling fee dashes
+    // and the total is a floor.
     expect(rowValue(host, "lot")).toBe("329 500 ₽");
     expect(rowValue(host, "shipping")).toBe("100 000 ₽");
-    expect(rowValue(host, "total")).toBe("429 500 ₽");
+    expect(rowValue(host, "total")).toBe("от 1 403 040 ₽");
     expect(panelOf(host).querySelector("[data-embedded-marker]")).toBeNull();
   });
 

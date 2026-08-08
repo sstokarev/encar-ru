@@ -65,6 +65,12 @@ export const CBR_FX_NOTE =
  */
 export const TARIFF_ROUNDING_RUB = 100;
 
+/**
+ * Shown on the commission row when the quote is a floor: the ladder bracketed
+ * on a subtotal that is itself a lower bound, so the step may still move up.
+ */
+const COMMISSION_FLOOR_NOTE = "минимальная ступень: расчёт ещё неполный";
+
 /** Label of the row that carries the rounding, so the +N ₽ is never silent. */
 const ROUNDING_LABEL = "Округление тарифа (вверх до 100 ₽)";
 const ROUNDING_ID = "tariff-rounding";
@@ -72,8 +78,15 @@ const ROUNDING_ID = "tariff-rounding";
 /** Id of the engine's converted lot-price line (src/calc/customs.ts). */
 const LOT_LINE_ID = "lot";
 
-/** Finite and not negative — the shape a WON amount or a commission may have. */
-function isAmount(value: unknown): value is number {
+/**
+ * Finite and not negative — the shape a WON amount or a commission may have.
+ *
+ * NOT the same predicate as customs.ts's `isAmount`, which deliberately admits
+ * negatives (a discount line). Different name on purpose: two cooperating
+ * files with one name and opposite sign rules is how a discount silently
+ * becomes a charge.
+ */
+function isNonNegative(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
@@ -83,27 +96,42 @@ function isPositive(value: unknown): value is number {
 }
 
 /**
- * Structural check of a ladder, mirroring src/config.ts: non-empty, ascending
- * exclusive bounds, last entry open-ended. A config that reached here through
- * loadConfig has already passed it; DEFAULT_CONFIG and tests have not, and a
- * ladder that silently failed to resolve would drop the commission from the
- * total with nothing on screen looking wrong.
+ * Structural check of a ladder. MUST accept exactly what src/config.ts accepts
+ * — a config that passes the network validator and then fails here degrades
+ * every quote on the site to «по запросу» with nothing on screen saying the two
+ * validators disagree, which is a worse failure than either rule alone.
+ *
+ * Re-checked here rather than trusted because DEFAULT_CONFIG and tests never
+ * pass through loadConfig, and a ladder that silently failed to resolve would
+ * drop the commission from the total with nothing looking wrong.
+ *
+ * Fees must be NON-DECREASING. That is not tidiness: under "partial" the
+ * subtotal handed to the ladder is a floor, and the total is advertised as
+ * «от N ₽». Only a monotone ladder guarantees the fee picked from a floor is
+ * at most the real one — a decreasing step would over-quote and turn the lower
+ * bound into a number the client can beat.
  */
 function isLadder(brackets: unknown): brackets is LadderBracket[] {
   if (!Array.isArray(brackets) || brackets.length === 0) return false;
-  let previous = Number.NEGATIVE_INFINITY;
+  let previousBound = Number.NEGATIVE_INFINITY;
+  let previousFee = Number.NEGATIVE_INFINITY;
   for (let index = 0; index < brackets.length; index += 1) {
     const bracket = brackets[index] as LadderBracket | undefined;
     if (typeof bracket !== "object" || bracket === null) return false;
-    if (!isAmount(bracket.fee)) return false;
+    if (!isNonNegative(bracket.fee) || bracket.fee < previousFee) return false;
+    previousFee = bracket.fee;
     const last = index === brackets.length - 1;
     if (last) {
       if (bracket.underRub !== undefined) return false;
     } else {
-      if (!isPositive(bracket.underRub) || bracket.underRub <= previous) {
+      if (
+        typeof bracket.underRub !== "number" ||
+        !Number.isFinite(bracket.underRub) ||
+        bracket.underRub <= previousBound
+      ) {
         return false;
       }
-      previous = bracket.underRub;
+      previousBound = bracket.underRub;
     }
   }
   return true;
@@ -175,7 +203,7 @@ function splitConfig(config: WidgetConfig): SplitConfig {
   };
   for (const item of config.costItems) {
     if (item.kind === "krw") {
-      if (isAmount(item.value)) {
+      if (isNonNegative(item.value)) {
         split.krwItems.push({ id: item.id, label: item.label, krw: item.value });
       } else {
         split.malformed = true;
@@ -205,9 +233,17 @@ function splitConfig(config: WidgetConfig): SplitConfig {
  *
  * The engine converted their SUM (that is the whole point — the customs value
  * includes the freight), so the parts are re-derived from the same rate and the
- * LAST part absorbs the rounding residual. The displayed rows therefore always
- * add up to exactly the figure customs was computed from; rounding each part
- * independently could leave the table one ruble short of its own subtotal.
+ * rows are guaranteed to add up to exactly the figure customs was computed
+ * from. Each row is the difference of two rounded RUNNING TOTALS rather than a
+ * rounded amount of its own: rounding the parts independently and letting the
+ * last one absorb the residual can hand that last row a NEGATIVE ruble (two
+ * WON items, ~5% of rate/amount combinations), and a cost table with a
+ * «−1 ₽» row is not a table anyone will trust. Differences of a monotone
+ * running total cannot go negative.
+ *
+ * A zero-valued WON item is DROPPED rather than rendered: «0 ₽» reads as
+ * "free", which is the exact failure the engine's dash semantics exist to
+ * prevent (see the UnknownCostLine comment in customs.ts).
  */
 function splitPriceLine(
   lotLine: CostLine,
@@ -216,18 +252,21 @@ function splitPriceLine(
   krwRub: number,
 ): CostLine[] {
   if (isUnknownLine(lotLine) || krwItems.length === 0) return [lotLine];
+  let cumulativeKrw = carPriceKrw;
+  let cumulativeRub = Math.round(cumulativeKrw * krwRub);
   const rows: CostLine[] = [
-    { id: lotLine.id, label: lotLine.label, rub: Math.round(carPriceKrw * krwRub) },
+    { id: lotLine.id, label: lotLine.label, rub: cumulativeRub },
   ];
-  let assigned = (rows[0] as { rub: number }).rub;
   for (let index = 0; index < krwItems.length; index += 1) {
     const item = krwItems[index]!;
     const last = index === krwItems.length - 1;
-    const rub = last
-      ? lotLine.rub - assigned
-      : Math.round(item.krw * krwRub);
-    assigned += rub;
-    rows.push({ id: item.id, label: item.label, rub });
+    cumulativeKrw += item.krw;
+    // The last row closes on the engine's own figure, so the split can never
+    // disagree with the value the tariff brackets were chosen from.
+    const nextRub = last ? lotLine.rub : Math.round(cumulativeKrw * krwRub);
+    const rub = nextRub - cumulativeRub;
+    cumulativeRub = nextRub;
+    if (rub !== 0) rows.push({ id: item.id, label: item.label, rub });
   }
   return rows;
 }
@@ -260,22 +299,19 @@ export function computeQuote(
     costItems: split.engineItems,
   });
 
-  // "по запросу" is terminal: no rounding, no commission, no split. Inventing
-  // a commission on a quote we are refusing to show is worse than none.
-  if (base.precision === "onRequest" || split.malformed) {
-    return {
-      items: base.items,
-      totalRub: base.totalRub,
-      precision: "onRequest",
-      notes: [...base.notes, CBR_FX_NOTE],
-    };
-  }
-
   // Rebuild the table: split the price line, and find where the tariff block
   // ends. The tariff lines are exactly the ones the engine invented — an item
   // whose id is neither the price line's nor any of the config's own. Matching
   // that way rather than on ("duty", "recycling", "clearance") keeps this
   // correct when task/tks-parity adds the акциз/НДС lines its brief describes.
+  //
+  // This runs BEFORE the «по запросу» exit on purpose. Both renderers draw
+  // every ROW even when the total is refused (src/page/render.ts,
+  // src/ui/breakdown.ts) — only the total is replaced by the refusal text. An
+  // unsplit price row would then print the folded figure under the label
+  // «Цена лота», i.e. the car plus 2 500 000 KRW of freight, with no row saying
+  // where the difference came from: 5.6% too high on a line the client can
+  // check against the encar page in one glance.
   const items: CostLine[] = [];
   let tariffSum = 0;
   let tariffComplete = true;
@@ -302,6 +338,18 @@ export function computeQuote(
     }
   }
 
+  // «по запросу» is terminal for the MONEY: the rows above are honest and are
+  // shown, but nothing further is computed on top of a quote we are refusing.
+  // Inventing a commission on a refused quote is worse than none.
+  if (base.precision === "onRequest" || split.malformed) {
+    return {
+      items,
+      totalRub: base.totalRub,
+      precision: "onRequest",
+      notes: [...base.notes, CBR_FX_NOTE],
+    };
+  }
+
   // Round the tariff block UP to the nearest 100 RUB — the operator's rule,
   // and the 43 RUB that closes his printed quote. Only when the block is
   // COMPLETE: under "partial" the total is advertised as a lower bound
@@ -324,11 +372,20 @@ export function computeQuote(
   // non-decreasing, so the commission it picks is at most the real one and the
   // total stays a provable floor.
   if (split.ladder !== null) {
-    rounded.push({
+    const commission: CostLine = {
       id: split.ladder.id,
       label: split.ladder.label,
       rub: commissionRub(split.ladder.brackets, sumComputed(rounded)),
-    });
+    };
+    // Under "partial" every other row is honest but the SUBTOTAL is a floor, so
+    // the step this picked may be a lower one than the finished quote will
+    // land on. The total already says «от N ₽»; without this note the
+    // commission row alone would read as a firm figure the client could hold
+    // us to.
+    if (base.precision === "partial") {
+      commission.note = COMMISSION_FLOOR_NOTE;
+    }
+    rounded.push(commission);
   }
 
   const totalRub = sumComputed(rounded);

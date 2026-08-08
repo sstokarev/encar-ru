@@ -37,7 +37,13 @@ import {
   computeQuote,
   TARIFF_ROUNDING_RUB,
 } from "../src/calc/pricing";
-import { DEFAULT_CONFIG, type CostItem, type WidgetConfig } from "../src/config.default";
+import { isValidConfig } from "../src/config";
+import {
+  DEFAULT_CONFIG,
+  type CostItem,
+  type LadderBracket,
+  type WidgetConfig,
+} from "../src/config.default";
 
 /** The day the operator priced the lot. */
 const QUOTE_DAY = new Date(2026, 6, 15);
@@ -179,6 +185,69 @@ describe("WON costs are folded in before the conversion", () => {
     expect(amount(quote.items, "clearance")).toBe(
       amount(engineOnly.items, "clearance"),
     );
+  });
+
+  it("splits several WON items without ever producing a negative row", () => {
+    // The residual was originally dumped on the LAST row, which goes NEGATIVE
+    // for about 5% of rate/amount combinations once there are two WON items —
+    // a «−1 ₽» line in a cost table. Each row is now the difference of two
+    // rounded running totals, which cannot invert.
+    const rates: FxRates = { krwRub: 0.0542, eurRub: 88.5259 };
+    const quote = computeQuote(
+      quoteLot(),
+      rates,
+      config({
+        costItems: [
+          { id: "export", label: "Экспортное оформление", kind: "krw", value: 900_005 },
+          { id: "freight", label: "Фрахт", kind: "krw", value: 1_599_995 },
+          ...withoutItem("korea"),
+        ],
+      }),
+    );
+    for (const item of quote.items) {
+      if (!isUnknownLine(item)) expect(item.rub).toBeGreaterThanOrEqual(0);
+    }
+    expect(
+      amount(quote.items, "lot") +
+        amount(quote.items, "export") +
+        amount(quote.items, "freight"),
+    ).toBe(Math.round((CAR_PRICE_KRW + 2_500_000) * rates.krwRub));
+    // Same WON total as the shipped single item, so the quote is unchanged.
+    expect(quote.totalRub).toBe(5_045_020);
+  });
+
+  it("drops a zero WON item instead of printing «0 ₽»", () => {
+    // A zero amount rendered as money reads as "free" — the exact failure the
+    // engine's dash semantics exist to prevent.
+    const quote = computeQuote(
+      quoteLot(),
+      QUOTE_RATES,
+      config({
+        costItems: withItem({
+          id: "korea",
+          label: "Расходы по Корее",
+          kind: "krw",
+          value: 0,
+        }),
+      }),
+    );
+    expect(quote.items.find((item) => item.id === "korea")).toBeUndefined();
+    expect(amount(quote.items, "lot")).toBe(2_417_320);
+  });
+
+  it("splits the price even when the quote is refused", () => {
+    // Both renderers draw every ROW under «по запросу» and replace only the
+    // total. An unsplit row would print the car PLUS 2 500 000 KRW of freight
+    // under the label «Цена лота» — 5.6% high on the one line the client can
+    // check against the encar page at a glance.
+    const refused = computeQuote(
+      { ...quoteLot(), fuel: "electric" },
+      QUOTE_RATES,
+      DEFAULT_CONFIG,
+    );
+    expect(refused.precision).toBe("onRequest");
+    expect(amount(refused.items, "lot")).toBe(2_417_320);
+    expect(amount(refused.items, "korea")).toBe(135_500);
   });
 
   it("splits the converted price so the rows sum to what customs used", () => {
@@ -348,6 +417,58 @@ describe("the commission ladder", () => {
     expect(broken.precision).toBe("onRequest");
   });
 
+  it("refuses every malformed ladder shape, not just an unsorted one", () => {
+    const refuses = (brackets: unknown): void => {
+      const quote = computeQuote(
+        quoteLot(),
+        QUOTE_RATES,
+        config({
+          costItems: withItem({
+            id: "commission",
+            label: "Комиссия",
+            kind: "ladder",
+            brackets: brackets as never,
+          }),
+        }),
+      );
+      expect(quote.precision).toBe("onRequest");
+    };
+    refuses([]);
+    refuses([{ underRub: 1_500_000, fee: 30_000 }]); // last bracket bounded
+    refuses([null, { fee: 1 }]);
+    refuses([{ underRub: 1_000, fee: Number.NaN }, { fee: 1 }]);
+    refuses([{ underRub: 1_000, fee: -1 }, { fee: 1 }]);
+    // Fees that step DOWN break the floor guarantee: under "partial" the
+    // ladder is fed a lower-bound subtotal, and only a non-decreasing ladder
+    // can promise the step it picks is at most the real one.
+    refuses([{ underRub: 1_000, fee: 90_000 }, { fee: 10_000 }]);
+  });
+
+  it("accepts exactly the ladders the config validator accepts", () => {
+    // A config that passes isValidConfig and then fails isLadder loads as
+    // "remote" — no «встроенные тарифы» marker — and degrades every quote on
+    // the site to «по запросу» with nothing saying the validators disagreed.
+    const cases: LadderBracket[][] = [
+      [{ underRub: 1_500_000, fee: 30_000 }, { fee: 100_000 }],
+      [{ underRub: 0, fee: 0 }, { fee: 1 }],
+      [{ fee: 0 }],
+    ];
+    for (const brackets of cases) {
+      const cfg = config({
+        costItems: withItem({
+          id: "commission",
+          label: "Комиссия",
+          kind: "ladder",
+          brackets,
+        }),
+      });
+      const accepted = isValidConfig(JSON.parse(JSON.stringify(cfg)));
+      const quoted =
+        computeQuote(quoteLot(), QUOTE_RATES, cfg).precision !== "onRequest";
+      expect([brackets, accepted]).toEqual([brackets, quoted]);
+    }
+  });
+
   it("refuses a second ladder rather than charging commission twice", () => {
     const doubled = computeQuote(
       quoteLot(),
@@ -376,6 +497,42 @@ describe("the commission ladder", () => {
       }),
     );
     expect(broken.precision).toBe("onRequest");
+  });
+});
+
+describe("the seam between the engine and the model", () => {
+  it("still calls the engine's converted price row 'lot'", () => {
+    // pricing.ts finds the row to split by this id and treats every OTHER
+    // engine row as part of the tariff block. Rename it in customs.ts and
+    // nothing throws: the price row would be rounded as if it were a tariff and
+    // the Korean-costs row would vanish. This is the tripwire for that rename.
+    const engineOnly = computeAllIn(quoteLot(), QUOTE_RATES, {
+      ...DEFAULT_CONFIG,
+      costItems: [],
+    });
+    expect(engineOnly.items.map((item) => item.id)).toContain("lot");
+  });
+
+  it("refuses a config whose item id collides with an engine row", () => {
+    // An item called "duty" would take the real duty out of the tariff block
+    // (wrong rounding); one called "lot" would duplicate the price row and
+    // produce a negative Korean-costs row. Neither throws — both print wrong
+    // money — so the validator rejects them at load.
+    for (const id of ["lot", "duty", "recycling", "clearance", "tariff-rounding"]) {
+      const cfg = JSON.parse(
+        JSON.stringify(config({ costItems: withItem({ id, label: "X", kind: "fixed", value: 1 }) })),
+      ) as unknown;
+      expect([id, isValidConfig(cfg)]).toEqual([id, false]);
+    }
+  });
+
+  it("refuses a config with no customs item at all", () => {
+    // Every other line is priced now, so such a config quotes a car with no
+    // duty and reports it as "exact" — millions short, with no dash to show it.
+    const cfg = JSON.parse(
+      JSON.stringify(config({ costItems: withoutItem("customs") })),
+    ) as unknown;
+    expect(isValidConfig(cfg)).toBe(false);
   });
 });
 

@@ -63,8 +63,8 @@ interface SetupOptions {
 
 function setup(options: SetupOptions = {}): {
   doc: Document;
-  submit: (url: string) => Promise<void>;
-  submitNoWait: (url: string) => void;
+  submit: (url: string, powerHp?: string) => Promise<void>;
+  submitNoWait: (url: string, powerHp?: string) => void;
   drain: () => Promise<void>;
   result: HTMLElement;
   button: HTMLButtonElement;
@@ -332,6 +332,32 @@ describe("calc page", () => {
     await submit(LOT_URL, "-150");
     const table = result.querySelector("[data-cost-table]");
     expect(table?.getAttribute("data-precision")).toBe("onRequest");
+  });
+
+  it("clears a power left over from the previous car", async () => {
+    // 160 hp is a cliff: below it the утильсбор is 5 200 ₽, above it up to
+    // 1.8 M ₽. Nothing on screen echoes the entered number back, so a value
+    // carried over from the last lot would quote the wrong side of that cliff
+    // with full confidence. A NEW url wipes it; the same url keeps it.
+    const { doc, submit, submitNoWait, drain } = setup();
+    const power = doc.querySelector<HTMLInputElement>("[data-calc-power]")!;
+    await submit(LOT_URL, "150");
+    expect(power.value).toBe("150");
+
+    // Same lot again, no retyping: the value stands.
+    submitNoWait(LOT_URL, "150");
+    await drain();
+    expect(power.value).toBe("150");
+
+    // A different lot: the stale power is gone rather than silently reused.
+    power.value = "150";
+    doc.querySelector<HTMLInputElement>("[data-calc-url]")!.value =
+      "https://fem.encar.com/cars/detail/99999999";
+    doc
+      .querySelector<HTMLFormElement>("[data-calc-form]")!
+      .dispatchEvent(new Event("submit", { cancelable: true }));
+    await drain();
+    expect(power.value).toBe("");
   });
 
   it("prices the Korean costs in WON, inside the customs value", async () => {

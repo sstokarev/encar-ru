@@ -397,7 +397,7 @@ export function absorbBadge(badge: HTMLElement): void {
  */
 export type BadgePrecision = AllInResult["precision"] | "partial";
 
-/** All-in figures the badge renders; the shape computeAllIn() returns. */
+/** All-in figures the badge renders; the shape computeQuote() returns. */
 export interface BadgeTotal {
   totalRub: number;
   precision: BadgePrecision;

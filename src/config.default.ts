@@ -42,7 +42,15 @@ export interface FixedCostItem extends CostItemBase {
   value: number;
 }
 
-/** Percent of the lot RUB price. */
+/**
+ * Percent of the lot RUB price — where "lot price" means the CUSTOMS VALUE:
+ * the car plus every `krw` item, converted together (see KrwCostItem). Adding
+ * a WON-priced freight line therefore raises every percent item with it, which
+ * is the intended reading for an importer's percentage (he takes his cut on
+ * what the car actually costs landed), but it IS a change from the pre-2026-08
+ * behaviour where the percent saw the bare car price. No shipped config uses
+ * this kind today; spelled out so the next one is not surprised.
+ */
 export interface PercentCostItem extends CostItemBase {
   kind: "percent";
   value: number;

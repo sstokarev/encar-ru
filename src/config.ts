@@ -83,13 +83,27 @@ function isCostItem(value: unknown): value is CostItem {
       // Commission steps on the pre-commission subtotal. isBracketArray gives
       // the same guarantees as every tariff bracket: ascending bounds, last
       // entry open-ended, so the lookup always resolves.
+      //
+      // Fees must be NON-DECREASING, and that is a correctness rule rather than
+      // a tidiness one. When a customs line cannot be computed the quote is a
+      // FLOOR rendered «от N ₽», and the ladder is handed a subtotal that is
+      // itself a lower bound. Only a monotone ladder guarantees the step picked
+      // from a floor is at most the real one; a decreasing step would over-quote
+      // and hand the client a "minimum" he can beat.
+      //
+      // Kept in step with isLadder in src/calc/pricing.ts BY HAND. The two must
+      // accept exactly the same ladders: a config that passes here and fails
+      // there loads as "remote" (no «встроенные тарифы» marker) and then
+      // degrades every quote on the site to «по запросу», with nothing on
+      // screen saying the two validators disagreed.
       return (
         item["value"] === undefined &&
         isBracketArray(
           item["brackets"],
           "underRub",
           (entry) => isFiniteNumber(entry["fee"]) && entry["fee"] >= 0,
-        )
+        ) &&
+        hasNonDecreasingFees(item["brackets"])
       );
     default:
       return false;
@@ -104,6 +118,59 @@ function isCustomsFormulaItem(item: CostItem): boolean {
 /** True for a commission ladder item (at most one per config). */
 function isLadderItem(item: CostItem): boolean {
   return item.kind === "ladder";
+}
+
+/** Ladder fees never step DOWN — see the "ladder" case for why it matters. */
+function hasNonDecreasingFees(brackets: unknown): boolean {
+  if (!Array.isArray(brackets)) return false;
+  let previous = Number.NEGATIVE_INFINITY;
+  for (const raw of brackets) {
+    const fee = (raw as Record<string, unknown>)["fee"];
+    if (!isFiniteNumber(fee) || fee < previous) return false;
+    previous = fee;
+  }
+  return true;
+}
+
+/**
+ * Ids the CALCULATOR generates for lines the config did not declare: the
+ * converted price row, the customs block src/calc/customs.ts expands, and the
+ * tariff-rounding row src/calc/pricing.ts appends.
+ *
+ * A cost item may not claim one. src/calc/pricing.ts separates "the engine
+ * invented this row" from "the config asked for this row" by exactly this
+ * test, so a config item called "duty" would take the real duty out of the
+ * tariff block (wrong rounding), and one called "lot" would produce a
+ * duplicated price row and a negative Korean-costs row. Neither throws; both
+ * just print wrong money.
+ */
+const RESERVED_ITEM_IDS = [
+  "lot",
+  "duty",
+  "recycling",
+  "clearance",
+  "tariff-rounding",
+];
+
+function usesReservedId(items: readonly CostItem[]): boolean {
+  for (const item of items) {
+    for (const reserved of RESERVED_ITEM_IDS) {
+      if (item.id === reserved) return true;
+    }
+  }
+  return false;
+}
+
+/** Count without Array.prototype.filter — the host page replaces built-ins. */
+function countItems(
+  items: readonly CostItem[],
+  match: (item: CostItem) => boolean,
+): number {
+  let count = 0;
+  for (const item of items) {
+    if (match(item)) count += 1;
+  }
+  return count;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -266,11 +333,17 @@ export function isValidConfig(value: unknown): value is WidgetConfig {
     typeof currency?.["updatedAt"] === "string" &&
     Array.isArray(costItems) &&
     costItems.every(isCostItem) &&
-    // Two customs formula items would add duty, recycling and clearance twice.
-    (costItems as CostItem[]).filter(isCustomsFormulaItem).length <= 1 &&
+    // EXACTLY one customs item. Two would add duty, recycling and clearance
+    // twice; ZERO would quote a car with no customs at all — and since the
+    // operator's model prices every other line, that quote would carry no dash
+    // and be reported as "exact" while being millions of roubles short. Before
+    // his model landed the same config produced a table of dashes, which is why
+    // "at most one" used to be enough.
+    countItems(costItems as CostItem[], isCustomsFormulaItem) === 1 &&
     // Two ladders would charge the commission twice, and the second would
     // bracket on a subtotal that already contains the first.
-    (costItems as CostItem[]).filter(isLadderItem).length <= 1 &&
+    countItems(costItems as CostItem[], isLadderItem) <= 1 &&
+    !usesReservedId(costItems as CostItem[]) &&
     isCustomsConfig(cfg["customs"]) &&
     typeof cfg["commissionNote"] === "string"
   );

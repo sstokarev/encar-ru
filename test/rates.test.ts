@@ -34,6 +34,9 @@ const TEST_CONFIG: WidgetConfig = {
   },
   costItems: [
     { id: "shipping", label: "Доставка", kind: "fixed", value: 100000 },
+    // Mandatory since the operator's model landed: a config without customs
+    // would quote an import with no duty and call it exact (src/config.ts).
+    { id: "customs", label: "Таможенные платежи", kind: "formula", value: "customs_v1" },
   ],
   customs: DEFAULT_CONFIG.customs,
   commissionNote: "Заметка.",
@@ -442,10 +445,13 @@ describe("async gate: no RUB before rates resolve", () => {
     );
     const badge = document.querySelector<HTMLElement>("[data-encar-ru-badge]")!;
     // The badge shows the all-in total at the resolved mirror rate:
-    // lot 6,590,000 KRW * 0.0555 = 365,745 + shipping 100,000 (TEST_CONFIG
-    // carries no customs formula item) = 465,745 RUB.
+    // lot 6,590,000 KRW * 0.0555 = 365,745 + shipping 100,000
+    // + duty 4.8 EUR/cc * 2199 cc * 91.2 = 962,634 + clearance 2,462
+    // = 1,430,841 RUB. TEST_CONFIG carries no WON item and no ladder, so the
+    // model adds nothing; the recycling fee dashes (a card publishes no engine
+    // power), which is why the figure is a floor.
     expect(badge.shadowRoot?.querySelector("span")?.textContent).toBe(
-      "465 745 ₽",
+      "от 1 430 841 ₽",
     );
   });
 });

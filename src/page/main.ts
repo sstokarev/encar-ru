@@ -77,10 +77,21 @@ export function initCalcPage(
   }
 
   let requestSeq = 0;
+  let lastLotUrl: string | null = null;
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const lotUrl = input.value.trim();
+    // A power left over from the PREVIOUS car is the sharp edge of this field.
+    // It is the only writer of powerHp in the product, nothing on screen echoes
+    // the number back, and 160 hp is a cliff: below it the утильсбор is 5 200 ₽,
+    // above it up to 1.8 M ₽. A stale value would quote the wrong side of that
+    // cliff with full "exact" confidence. Clearing on a NEW lot costs the
+    // client one retype and cannot quote the wrong car.
+    if (powerInput !== null && lastLotUrl !== null && lotUrl !== lastLotUrl) {
+      powerInput.value = "";
+    }
+    lastLotUrl = lotUrl;
     // Read now, not in the async body: the client may keep typing while the
     // fetch is in flight, and the quote must describe the form as submitted.
     const power = powerInput === null ? "" : powerInput.value;
