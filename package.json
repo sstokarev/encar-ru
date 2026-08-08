@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --format=iife --outfile=site/widget.js --minify",
+    "build": "npm run build:widget && npm run build:page",
+    "build:widget": "esbuild src/main.ts --bundle --format=iife --outfile=site/widget.js --minify",
+    "build:page": "esbuild src/page/main.ts --bundle --format=iife --outfile=site/calc.js --minify",
     "build:bookmarklet": "node scripts/build-bookmarklet.mjs",
     "build:extension": "node scripts/build-extension.mjs",
     "test": "vitest run"
