@@ -46,7 +46,8 @@ product questions to the architect.
 If your brief has `accepts`, the operator must watch that scenario at your
 worktree and say it works BEFORE you open a PR. His word is final.
 
-Then: push, open the PR, and finish with
+Your report file lives at `docs/reports/<name>.md` — never in `docs/tasks/`,
+which the board reads as briefs. Then: push, open the PR, and finish with
 
 ```
 orca orchestration worker_done --task-id <id> --dispatch-id <id> \
