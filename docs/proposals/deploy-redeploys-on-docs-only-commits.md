@@ -43,3 +43,11 @@ nothing. Whoever owns `deploy.yml` should confirm that no doc is copied into
 to work at all. The watch treats that push as best-effort and only warns when it
 fails, so a protected `main` degrades the watch rather than breaking it — but
 someone should decide deliberately which of the two they want.
+
+> **Verdict:** taken as `task/deploy-paths` — real and cheap: a `paths-ignore`
+> on `docs/**` in `deploy.yml` closes it. Not urgent enough to open a branch
+> while four are live, so it rides the next dispatch that touches CI. The
+> finding is right for the reason it gives — a weekly no-op deploy is noise
+> that hides a real one — and the write-up of WHY the watch commits at all is
+> what makes the fix safe: whoever adds `paths-ignore` must not also stop the
+> watch from recording its baseline.
