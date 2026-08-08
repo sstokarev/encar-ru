@@ -12,8 +12,8 @@
  * a document that actually carries the page form.
  */
 
-import { computeAllIn } from "../calc/customs";
-import { loadConfig, type LoadedConfig } from "../config";
+import { computeQuote } from "../calc/pricing";
+import { loadPageConfig, type LoadedConfig } from "../config";
 import { resolveRates, type ResolvedRates } from "../rates/cbr";
 import type { EncarFetch, ParseListingUrl } from "../encar/types";
 import { fetchCar, parseListingUrl, SOURCE } from "./encar-adapter";
@@ -32,10 +32,29 @@ export interface PageDeps {
 const DEFAULT_DEPS: PageDeps = {
   parseListingUrl,
   fetchCar,
-  loadConfig,
+  // loadPageConfig, not loadConfig: this page ships NEXT TO its config.json, so
+  // it must read the one it was deployed with. Reaching past its own directory
+  // to the production host is what made an operator accept a branch build
+  // against the previously published cost items.
+  loadConfig: loadPageConfig,
   resolveRates,
   demo: SOURCE === "fixture",
 };
+
+/**
+ * The optional «мощность, л.с.» field as a LotParams fragment.
+ *
+ * Empty means "not entered", which is not the same as "zero": it must leave
+ * powerHp absent so the recycling line dashes honestly. A typed-in 0 or a
+ * negative IS supplied-but-impossible, and the engine's own R3 rule then takes
+ * the quote down to «по запросу» — which is why the value is passed through
+ * rather than sanitised away here.
+ */
+function powerOverride(raw: string): { powerHp?: number } {
+  const text = raw.trim();
+  if (text === "") return {};
+  return { powerHp: Number(text.replace(",", ".")) };
+}
 
 const BAD_URL_MESSAGE =
   "Не похоже на ссылку encar.com. Скопируйте адрес страницы автомобиля целиком.";
@@ -54,15 +73,32 @@ export function initCalcPage(
   const input = doc.querySelector<HTMLInputElement>("[data-calc-url]");
   const submit = doc.querySelector<HTMLButtonElement>("[data-calc-submit]");
   const result = doc.querySelector<HTMLElement>("[data-calc-result]");
+  // Optional by design: the page works without it (the recycling line just
+  // dashes as before), so a document that predates the field still binds.
+  const powerInput = doc.querySelector<HTMLInputElement>("[data-calc-power]");
   if (form === null || input === null || submit === null || result === null) {
     return;
   }
 
   let requestSeq = 0;
+  let lastLotUrl: string | null = null;
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const lotUrl = input.value.trim();
+    // A power left over from the PREVIOUS car is the sharp edge of this field.
+    // It is the only writer of powerHp in the product, nothing on screen echoes
+    // the number back, and 160 hp is a cliff: below it the утильсбор is 5 200 ₽,
+    // above it up to 1.8 M ₽. A stale value would quote the wrong side of that
+    // cliff with full "exact" confidence. Clearing on a NEW lot costs the
+    // client one retype and cannot quote the wrong car.
+    if (powerInput !== null && lastLotUrl !== null && lotUrl !== lastLotUrl) {
+      powerInput.value = "";
+    }
+    lastLotUrl = lotUrl;
+    // Read now, not in the async body: the client may keep typing while the
+    // fetch is in flight, and the quote must describe the form as submitted.
+    const power = powerInput === null ? "" : powerInput.value;
     const vehicleId = deps.parseListingUrl(lotUrl);
     if (vehicleId === null) {
       renderError(result, BAD_URL_MESSAGE);
@@ -83,8 +119,17 @@ export function initCalcPage(
         const rates = await deps.resolveRates(loaded.config);
         if (seq !== requestSeq) return;
         const lot = toLotDetails(car);
-        const allIn = computeAllIn(
-          { priceKrw: car.priceKrw, ...lot },
+        // priceKrw is the CAR price alone: the Korean export/freight costs are
+        // WON cost items in the config, and computeQuote folds them in before
+        // the FX conversion so they land inside the customs value.
+        //
+        // A manager-entered power OVERRIDES whatever toLotDetails produced —
+        // no public encar surface carries engine power (docs/harness/
+        // spike-power.md), and task/tks-parity will start filling the same
+        // field from an offline catalog; a typed-in figure is the more
+        // specific evidence and must win, not be won over.
+        const allIn = computeQuote(
+          { priceKrw: car.priceKrw, ...lot, ...powerOverride(power) },
           rates,
           loaded.config,
         );

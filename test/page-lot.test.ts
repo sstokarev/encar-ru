@@ -7,11 +7,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   computeAgeYears,
-  computeAllIn,
   isUnknownLine,
   lotPrecision,
   type FxRates,
 } from "../src/calc/customs";
+import { computeQuote } from "../src/calc/pricing";
 import { DEFAULT_CONFIG } from "../src/config.default";
 import { mapFuel, toLotDetails } from "../src/page/lot";
 import type { CarData } from "../src/encar/types";
@@ -72,7 +72,7 @@ describe("toLotDetails", () => {
 
   it("dashes the recycling fee but computes the duty (no power in the data)", () => {
     const details = toLotDetails(car(), NOW);
-    const result = computeAllIn(
+    const result = computeQuote(
       { priceKrw: 20_000_000, ...details },
       RATES,
       DEFAULT_CONFIG,
@@ -87,7 +87,7 @@ describe("toLotDetails", () => {
   it("keeps the hybrid dash semantics end to end", () => {
     const details = toLotDetails(car({ fuelName: "하이브리드" }), NOW);
     expect(details.fuel).toBe("hybrid");
-    const result = computeAllIn(
+    const result = computeQuote(
       { priceKrw: 20_000_000, ...details },
       RATES,
       DEFAULT_CONFIG,

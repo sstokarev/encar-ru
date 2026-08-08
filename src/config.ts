@@ -21,6 +21,9 @@ export type {
   DutyValueTier,
   FixedCostItem,
   FormulaCostItem,
+  KrwCostItem,
+  LadderBracket,
+  LadderCostItem,
   MessengerConfig,
   MessengerType,
   PercentCostItem,
@@ -41,6 +44,35 @@ export type {
 export const CONFIG_URL = "https://sstokarev.github.io/encar-ru/config.json";
 
 const FETCH_TIMEOUT_MS = 3000;
+
+/**
+ * The config a PAGE of this site should try FIRST: the `config.json` sitting
+ * next to the page itself.
+ *
+ * Only ever for our own pages (site/calc.html, site/landing.html). The widget
+ * is injected into encar.com, where "next to the page" is
+ * `encar.com/config.json` — someone else's origin, quoting someone else's
+ * tariffs — so it keeps the absolute CONFIG_URL and never calls this.
+ *
+ * Why it exists: an operator serving the branch build on localhost was reading
+ * the PRODUCTION config, so the page under acceptance showed the OLD cost items
+ * («СБКТС и ЭПТС», «Брокер и СВХ» dashed) that the new bundle does not even
+ * contain. A page and the config it is deployed beside are one artifact; making
+ * the page reach past its own directory to a fixed host makes every build
+ * before deploy untestable.
+ *
+ * Returns null when the page is not served over http(s) — a `file://` open has
+ * no usable origin, and its relative fetch would be blocked anyway.
+ */
+export function sameOriginConfigUrl(href: string): string | null {
+  try {
+    const page = new URL(href);
+    if (page.protocol !== "http:" && page.protocol !== "https:") return null;
+    return new URL("config.json", page).href;
+  } catch {
+    return null;
+  }
+}
 
 export type ConfigSource = "remote" | "embedded";
 
@@ -71,6 +103,37 @@ function isCostItem(value: unknown): value is CostItem {
       // A cost the importer has not priced yet: it renders as a dash and is
       // excluded from the total, so an amount here would be silently dropped.
       return item["value"] === undefined;
+    case "krw":
+      // A WON amount folded into the price before conversion. Zero is a
+      // legitimate "waived this month"; negative is not — it would silently
+      // discount the customs value and with it the duty.
+      return isFiniteNumber(item["value"]) && item["value"] >= 0;
+    case "ladder":
+      // Commission steps on the pre-commission subtotal. isBracketArray gives
+      // the same guarantees as every tariff bracket: ascending bounds, last
+      // entry open-ended, so the lookup always resolves.
+      //
+      // Fees must be NON-DECREASING, and that is a correctness rule rather than
+      // a tidiness one. When a customs line cannot be computed the quote is a
+      // FLOOR rendered «от N ₽», and the ladder is handed a subtotal that is
+      // itself a lower bound. Only a monotone ladder guarantees the step picked
+      // from a floor is at most the real one; a decreasing step would over-quote
+      // and hand the client a "minimum" he can beat.
+      //
+      // Kept in step with isLadder in src/calc/pricing.ts BY HAND. The two must
+      // accept exactly the same ladders: a config that passes here and fails
+      // there loads as "remote" (no «встроенные тарифы» marker) and then
+      // degrades every quote on the site to «по запросу», with nothing on
+      // screen saying the two validators disagreed.
+      return (
+        item["value"] === undefined &&
+        isBracketArray(
+          item["brackets"],
+          "underRub",
+          (entry) => isFiniteNumber(entry["fee"]) && entry["fee"] >= 0,
+        ) &&
+        hasNonDecreasingFees(item["brackets"])
+      );
     default:
       return false;
   }
@@ -79,6 +142,65 @@ function isCostItem(value: unknown): value is CostItem {
 /** True for a recognised customs formula item (at most one per config). */
 function isCustomsFormulaItem(item: CostItem): boolean {
   return item.kind === "formula" && item.value === CUSTOMS_FORMULA;
+}
+
+/** True for a commission ladder item (at most one per config). */
+function isLadderItem(item: CostItem): boolean {
+  return item.kind === "ladder";
+}
+
+/** Ladder fees never step DOWN — see the "ladder" case for why it matters. */
+function hasNonDecreasingFees(brackets: unknown): boolean {
+  if (!Array.isArray(brackets)) return false;
+  let previous = Number.NEGATIVE_INFINITY;
+  for (const raw of brackets) {
+    const fee = (raw as Record<string, unknown>)["fee"];
+    if (!isFiniteNumber(fee) || fee < previous) return false;
+    previous = fee;
+  }
+  return true;
+}
+
+/**
+ * Ids the CALCULATOR generates for lines the config did not declare: the
+ * converted price row and the customs block src/calc/customs.ts expands.
+ *
+ * A cost item may not claim one. src/calc/pricing.ts separates "the engine
+ * invented this row" from "the config asked for this row" by exactly this
+ * test, so a config item called "duty" would take the real duty out of the
+ * tariff block (wrong rounding), and one called "lot" would produce a
+ * duplicated price row and a negative Korean-costs row. Neither throws; both
+ * just print wrong money.
+ */
+const RESERVED_ITEM_IDS = ["lot", "duty", "recycling", "clearance"];
+
+function usesReservedId(items: readonly CostItem[]): boolean {
+  for (const item of items) {
+    for (const reserved of RESERVED_ITEM_IDS) {
+      if (item.id === reserved) return true;
+    }
+  }
+  return false;
+}
+
+/** Every entry is a well-formed cost item — see isBracketArray on the loop. */
+function allItemsValid(items: readonly unknown[]): boolean {
+  for (const item of items) {
+    if (!isCostItem(item)) return false;
+  }
+  return true;
+}
+
+/** Count without Array.prototype.filter — the host page replaces built-ins. */
+function countItems(
+  items: readonly CostItem[],
+  match: (item: CostItem) => boolean,
+): number {
+  let count = 0;
+  for (const item of items) {
+    if (match(item)) count += 1;
+  }
+  return count;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -128,7 +250,16 @@ function isBracketArray(
 ): boolean {
   if (!Array.isArray(value) || value.length === 0) return false;
   let previous = Number.NEGATIVE_INFINITY;
-  return value.every((raw, index) => {
+  // A plain loop, never Array.prototype.every: www.encar.com ships an ES5
+  // bundle that REPLACES built-ins, and its `reduce` was measured returning the
+  // array itself instead of calling the callback (2026-08-02, see the header of
+  // src/calc/customs.ts). The calculator was hardened then; this file was the
+  // last one on the money path still trusting a prototype method — and it is
+  // the one that decides whether the remote config is used at all, so a broken
+  // `every` either waves every malformed tariff through or drops every client
+  // to embedded data. Neither is visible on screen.
+  for (let index = 0; index < value.length; index += 1) {
+    const raw = value[index];
     if (typeof raw !== "object" || raw === null) return false;
     const entry = raw as Record<string, unknown>;
     const last = index === value.length - 1;
@@ -139,8 +270,9 @@ function isBracketArray(
       if (!isFiniteNumber(bound) || bound <= previous) return false;
       previous = bound;
     }
-    return isEntry(entry);
-  });
+    if (!isEntry(entry)) return false;
+  }
+  return true;
 }
 
 /** A recycling-fee cell: a RUB amount for a new car and for a used one. */
@@ -240,9 +372,19 @@ export function isValidConfig(value: unknown): value is WidgetConfig {
     isPositiveNumber(rates["EUR_RUB"]) &&
     typeof currency?.["updatedAt"] === "string" &&
     Array.isArray(costItems) &&
-    costItems.every(isCostItem) &&
-    // Two customs formula items would add duty, recycling and clearance twice.
-    (costItems as CostItem[]).filter(isCustomsFormulaItem).length <= 1 &&
+    // for-of, same reason as isBracketArray above.
+    allItemsValid(costItems) &&
+    // EXACTLY one customs item. Two would add duty, recycling and clearance
+    // twice; ZERO would quote a car with no customs at all — and since the
+    // operator's model prices every other line, that quote would carry no dash
+    // and be reported as "exact" while being millions of roubles short. Before
+    // his model landed the same config produced a table of dashes, which is why
+    // "at most one" used to be enough.
+    countItems(costItems as CostItem[], isCustomsFormulaItem) === 1 &&
+    // Two ladders would charge the commission twice, and the second would
+    // bracket on a subtotal that already contains the first.
+    countItems(costItems as CostItem[], isLadderItem) <= 1 &&
+    !usesReservedId(costItems as CostItem[]) &&
     isCustomsConfig(cfg["customs"]) &&
     typeof cfg["commissionNote"] === "string"
   );
@@ -278,4 +420,29 @@ export async function loadConfig(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Loads the config for one of THIS site's own pages: its own `config.json`
+ * first, the published one as a fallback.
+ *
+ * The fallback is not decoration. A page opened from `file://`, or one deployed
+ * somewhere its `config.json` was not copied to, must still quote real tariffs
+ * rather than silently drop to the embedded copy — so a same-origin miss (404,
+ * malformed payload, no origin at all) is retried against CONFIG_URL, and only
+ * then does the embedded fallback apply. `loadConfig` never rejects, so neither
+ * does this.
+ *
+ * The widget must NOT use this: injected into encar.com it would fetch
+ * `encar.com/config.json`. It calls `loadConfig()` and gets CONFIG_URL.
+ */
+export async function loadPageConfig(
+  href: string = typeof location === "undefined" ? "" : location.href,
+): Promise<LoadedConfig> {
+  const own = sameOriginConfigUrl(href);
+  if (own !== null && own !== CONFIG_URL) {
+    const loaded = await loadConfig(own);
+    if (loaded.source === "remote") return loaded;
+  }
+  return loadConfig(CONFIG_URL);
 }

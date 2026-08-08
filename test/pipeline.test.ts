@@ -19,10 +19,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { init } from "../src/main";
 import { badgeText as renderBadgeText } from "../src/ui/badge";
 import {
-  computeAllIn,
   isUnknownLine,
   type LotParams,
 } from "../src/calc/customs";
+import { computeQuote } from "../src/calc/pricing";
 import { DEFAULT_CONFIG } from "../src/config.default";
 import { extractListingParams } from "../src/scan/params";
 import { applyDictionary } from "../src/translate/apply";
@@ -258,7 +258,7 @@ describe("listing params survive our own translation", () => {
   });
 });
 
-describe("computeAllIn refuses to produce a non-finite total", () => {
+describe("computeQuote refuses to produce a non-finite total", () => {
   /**
    * Every one of these lots carries a param that is PRESENT but cannot be a
    * value. That is a broken reading, not missing data: the quote must refuse
@@ -292,7 +292,7 @@ describe("computeAllIn refuses to produce a non-finite total", () => {
 
   for (const { name, lot } of bad) {
     it(`${name} degrades to "onRequest" with a finite total`, () => {
-      const result = computeAllIn(lot, RATES, DEFAULT_CONFIG);
+      const result = computeQuote(lot, RATES, DEFAULT_CONFIG);
       expect(result.precision).toBe("onRequest");
       expect(Number.isFinite(result.totalRub)).toBe(true);
       for (const item of result.items) {
@@ -307,7 +307,7 @@ describe("computeAllIn refuses to produce a non-finite total", () => {
     // Nothing here is broken: the row simply does not publish an age or a
     // displacement. The lot price and the clearance fee are still provable, so
     // the honest answer is "от N ₽", not "по запросу".
-    const result = computeAllIn(
+    const result = computeQuote(
       { priceKrw: 20_000_000 } as LotParams,
       RATES,
       DEFAULT_CONFIG,
@@ -331,7 +331,7 @@ describe("computeAllIn refuses to produce a non-finite total", () => {
       { krwRub: 0.055, eurRub: NaN },
       { krwRub: 0, eurRub: 90 },
     ]) {
-      const result = computeAllIn(lot, rates, DEFAULT_CONFIG);
+      const result = computeQuote(lot, rates, DEFAULT_CONFIG);
       expect(result.precision).toBe("onRequest");
       expect(Number.isFinite(result.totalRub)).toBe(true);
     }

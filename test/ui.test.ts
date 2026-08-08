@@ -12,7 +12,7 @@ import {
   type BreakdownLotDetails,
 } from "../src/ui/breakdown";
 import { BADGE_GAP_PX, attachBadge, type BadgeTotal } from "../src/ui/badge";
-import { computeAllIn } from "../src/calc/customs";
+import { computeQuote } from "../src/calc/pricing";
 import { buildOrderLink } from "../src/ui/order-button";
 import type { ResolvedRates } from "../src/rates/cbr";
 import { init } from "../src/main";
@@ -27,12 +27,12 @@ import { init } from "../src/main";
  */
 const calcOverride = vi.hoisted(() => ({ result: null as unknown }));
 
-vi.mock("../src/calc/customs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/calc/customs")>();
+vi.mock("../src/calc/pricing", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/calc/pricing")>();
   return {
     ...actual,
-    computeAllIn: (...args: Parameters<typeof actual.computeAllIn>) =>
-      calcOverride.result ?? actual.computeAllIn(...args),
+    computeQuote: (...args: Parameters<typeof actual.computeQuote>) =>
+      calcOverride.result ?? actual.computeQuote(...args),
   };
 });
 
@@ -56,6 +56,10 @@ const REMOTE_CONFIG: WidgetConfig = {
   },
   costItems: [
     { id: "shipping", label: "Доставка", kind: "fixed", value: 100000 },
+    // A config without a customs item is now refused outright (src/config.ts):
+    // with every other line priced it would quote a car with no duty at all and
+    // report it as "exact". Even a stub config has to carry one.
+    { id: "customs", label: "Таможенные платежи", kind: "formula", value: "customs_v1" },
   ],
   customs: DEFAULT_CONFIG.customs,
   commissionNote: "Тестовая заметка.",
@@ -310,14 +314,18 @@ describe("breakdown panel", () => {
     //   lot 500,000; shipping 100,000; commission 10% = 50,000;
     //   duty 2.7 EUR/cc * 2000 = 5,400 EUR * 90 = 486,000;
     //   recycling 5,200 (>=3y, <=3000cc, <=160hp); clearance 4,924
-    //   (lot <= 1,200,000, ПП РФ 1638); total 1,146,124.
-    const result = computeAllIn(
+    //   (lot <= 1,200,000, ПП РФ 1638).
+    // The tariff block is 496,124 and the operator rounds it UP to the nearest
+    // 100 («мы округляем вверх до нулей»), so the total is 1,146,200 rather
+    // than 1,146,124. The +76 rides on the duty line and has no row of its own:
+    // «округление убери и просто зашей молча в цену».
+    const result = computeQuote(
       { priceKrw: KRW, ...LOT },
       { krwRub: 0.05, eurRub: 90 },
       CLEAN_CONFIG,
     );
     expect(result.precision).toBe("exact");
-    expect(result.totalRub).toBe(1_146_124);
+    expect(result.totalRub).toBe(1_146_200);
 
     const host = attachDirect(CLEAN_CONFIG, KRW, "remote", LOT);
     toggleOf(host).click();
@@ -338,10 +346,12 @@ describe("breakdown panel", () => {
     expect(rowValue(host, "lot")).toBe("500 000 ₽");
     expect(rowValue(host, "shipping")).toBe("100 000 ₽");
     expect(rowValue(host, "commission")).toBe("50 000 ₽");
-    expect(rowValue(host, "duty")).toBe("486 000 ₽");
+    // 486,000 + the 76 ₽ of rounding, absorbed silently.
+    expect(rowValue(host, "duty")).toBe("486 076 ₽");
+    // The statutory amounts are untouched — a client can look them up.
     expect(rowValue(host, "recycling")).toBe("5 200 ₽");
     expect(rowValue(host, "clearance")).toBe("4 924 ₽");
-    expect(rowValue(host, "total")).toBe("1 146 124 ₽");
+    expect(rowValue(host, "total")).toBe("1 146 200 ₽");
     expect(panelOf(host).getAttribute("data-precision")).toBe("exact");
   });
 
@@ -707,7 +717,7 @@ describe("detail-page control (layout + encar styling)", () => {
     expect(toggleValue(host)).toBe(
       badge.shadowRoot?.querySelector("span")?.textContent,
     );
-    expect(toggleValue(host)).toBe("429 500 ₽");
+    expect(toggleValue(host)).toBe("от 1 403 040 ₽");
     // No second "Расчёт" pill next to the number.
     expect(toggle.textContent).not.toContain("Расчёт");
     expect(toggle.querySelector("[data-chevron]")).not.toBeNull();
@@ -914,12 +924,14 @@ describe("integration with the widget entry point", () => {
     });
     const host = breakdownHost()!;
     toggleOf(host).click();
-    // 6,590,000 KRW * 0.05 = 329,500 lot. U7 extracts full card params, so
-    // the total is exact; REMOTE_CONFIG has no formula item, hence only the
-    // lot and shipping rows: 329,500 + 100,000 = 429,500.
+    // 6,590,000 KRW * 0.05 = 329,500 lot + shipping 100,000. REMOTE_CONFIG now
+    // must carry a customs item (a config without one is refused), so U7's card
+    // params add duty 4.8 EUR/cc * 2199 cc * 92 = 971,078 and clearance 2,462:
+    // 1,403,040. A card publishes no engine power, so the recycling fee dashes
+    // and the total is a floor.
     expect(rowValue(host, "lot")).toBe("329 500 ₽");
     expect(rowValue(host, "shipping")).toBe("100 000 ₽");
-    expect(rowValue(host, "total")).toBe("429 500 ₽");
+    expect(rowValue(host, "total")).toBe("от 1 403 040 ₽");
     expect(panelOf(host).querySelector("[data-embedded-marker]")).toBeNull();
   });
 
@@ -932,13 +944,20 @@ describe("integration with the widget entry point", () => {
       expect(breakdownHost()).not.toBeNull();
     });
     const host = breakdownHost()!;
-    // DEFAULT_CONFIG: lot 6,590,000 * 0.055 = 362,450. U7 card params
-    // (2016/09, 2199cc diesel, 118 months old -> y5plus): + duty
-    // 4.8*2199*90 = 949,968 + clearance 2,462 -> 1,314,880. The recycling fee
-    // dashes (a card publishes no engine power) and shipping / sbkts / broker
-    // / commission are "unknown" items, so the total is a floor.
+    // DEFAULT_CONFIG, the operator's model. The car alone is 6,590,000 *
+    // 0.055 = 362,450, and the Korean costs (2,500,000 KRW) convert beside it
+    // at the same rate: 137,500. They are folded in BEFORE conversion, so the
+    // customs value is 499,950 and the clearance fee is the 4,924 bracket, not
+    // the 2,462 one it would have been had the freight been a RUB line after
+    // the fact — the difference this shape exists to get right.
+    // U7 card params (2016/09, 2199cc diesel, 118 months -> y5plus): duty
+    // 4.8*2199*90 = 949,968. + broker 116,000 -> subtotal 1,570,842 -> the
+    // ladder's second step, 50,000 -> 1,620,842. The recycling fee still
+    // dashes (a card publishes no engine power), so the total is a floor and
+    // carries no rounding row.
     expect(rowValue(host, "lot")).toBe("362 450 ₽");
-    expect(rowValue(host, "total")).toBe("от 1 314 880 ₽");
+    expect(rowValue(host, "korea")).toBe("137 500 ₽");
+    expect(rowValue(host, "total")).toBe("от 1 620 842 ₽");
     expect(
       panelOf(host).querySelector("[data-embedded-marker]"),
     ).not.toBeNull();

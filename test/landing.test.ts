@@ -204,6 +204,10 @@ describe("landing page copy", () => {
       readFileSync(resolve("site/config.json"), "utf8"),
     ) as { costItems: { id: string }[] };
     const wordFor: Readonly<Record<string, string>> = {
+      // "korea" is what task/importer-pricing renamed "shipping" to when the
+      // freight became a WON-priced item. The COPY already says «фрахт» — only
+      // this map needed the new id.
+      korea: "фрахт",
       shipping: "фрахт",
       customs: "пошлина",
       sbkts: "СБКТС",

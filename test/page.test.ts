@@ -42,6 +42,7 @@ function pageDom(): Document {
   document.body.innerHTML = `
     <form data-calc-form>
       <input data-calc-url type="url">
+      <input data-calc-power type="number">
       <button data-calc-submit type="submit">Рассчитать</button>
     </form>
     <div data-calc-result></div>
@@ -62,8 +63,8 @@ interface SetupOptions {
 
 function setup(options: SetupOptions = {}): {
   doc: Document;
-  submit: (url: string) => Promise<void>;
-  submitNoWait: (url: string) => void;
+  submit: (url: string, powerHp?: string) => Promise<void>;
+  submitNoWait: (url: string, powerHp?: string) => void;
   drain: () => Promise<void>;
   result: HTMLElement;
   button: HTMLButtonElement;
@@ -99,8 +100,10 @@ function setup(options: SetupOptions = {}): {
   if (input === null || form === null || result === null || button === null) {
     throw new Error("page dom incomplete");
   }
-  const submitNoWait = (url: string): void => {
+  const power = doc.querySelector<HTMLInputElement>("[data-calc-power]");
+  const submitNoWait = (url: string, powerHp = ""): void => {
     input.value = url;
+    if (power !== null) power.value = powerHp;
     form.dispatchEvent(new Event("submit", { cancelable: true }));
   };
   const drain = async (): Promise<void> => {
@@ -115,8 +118,8 @@ function setup(options: SetupOptions = {}): {
     fetchCalls,
     submitNoWait,
     drain,
-    submit: async (url: string) => {
-      submitNoWait(url);
+    submit: async (url: string, powerHp = "") => {
+      submitNoWait(url, powerHp);
       await drain();
     },
   };
@@ -288,6 +291,94 @@ describe("calc page", () => {
         .querySelector("[data-photo-main]")
         ?.getAttribute("referrerpolicy"),
     ).toBe("no-referrer");
+  });
+
+  it("turns the dashed recycling line into a number when power is entered", async () => {
+    // No public encar surface publishes engine power (docs/harness/
+    // spike-power.md), so without this field the утильсбор line can only dash
+    // and every quote is a floor. With it the page finally quotes a price.
+    const { result, submit } = setup();
+    await submit(LOT_URL, "150");
+    const table = result.querySelector("[data-cost-table]");
+    const rowText = (id: string): string =>
+      table?.querySelector(`[data-item-id="${id}"]`)?.textContent ?? "";
+    expect(rowText("recycling")).toContain("₽");
+    expect(rowText("recycling")).not.toContain("—");
+    // "approx", not "exact": this fixture registered 09.2021 sits within two
+    // months of the 5-year duty cliff, and the unknown registration DAY can
+    // still move it. What matters here is that it stopped being a FLOOR.
+    expect(table?.getAttribute("data-precision")).toBe("approx");
+    const total = table?.querySelector('[data-row="total"]')?.textContent ?? "";
+    expect(total).toContain("≈");
+    expect(total).not.toContain("от ");
+  });
+
+  it("leaves the line dashed when the field is left empty", async () => {
+    // Empty is "not entered", never zero: a zero would read as a real power
+    // and buy the 5 200 ₽ льгота for a car nobody measured.
+    const { result, submit } = setup();
+    await submit(LOT_URL, "");
+    const table = result.querySelector("[data-cost-table]");
+    expect(
+      table?.querySelector('[data-item-id="recycling"]')?.textContent,
+    ).toContain("—");
+    expect(table?.getAttribute("data-precision")).toBe("partial");
+  });
+
+  it("refuses the quote when the entered power is impossible", async () => {
+    // Supplied-but-impossible is not missing data: the engine's own R3 rule
+    // takes such a lot to «по запросу» rather than quoting around it.
+    const { result, submit } = setup();
+    await submit(LOT_URL, "-150");
+    const table = result.querySelector("[data-cost-table]");
+    expect(table?.getAttribute("data-precision")).toBe("onRequest");
+  });
+
+  it("clears a power left over from the previous car", async () => {
+    // 160 hp is a cliff: below it the утильсбор is 5 200 ₽, above it up to
+    // 1.8 M ₽. Nothing on screen echoes the entered number back, so a value
+    // carried over from the last lot would quote the wrong side of that cliff
+    // with full confidence. A NEW url wipes it; the same url keeps it.
+    const { doc, submit, submitNoWait, drain } = setup();
+    const power = doc.querySelector<HTMLInputElement>("[data-calc-power]")!;
+    await submit(LOT_URL, "150");
+    expect(power.value).toBe("150");
+
+    // Same lot again, no retyping: the value stands.
+    submitNoWait(LOT_URL, "150");
+    await drain();
+    expect(power.value).toBe("150");
+
+    // A different lot: the stale power is gone rather than silently reused.
+    power.value = "150";
+    doc.querySelector<HTMLInputElement>("[data-calc-url]")!.value =
+      "https://fem.encar.com/cars/detail/99999999";
+    doc
+      .querySelector<HTMLFormElement>("[data-calc-form]")!
+      .dispatchEvent(new Event("submit", { cancelable: true }));
+    await drain();
+    expect(power.value).toBe("");
+  });
+
+  it("prices the Korean costs in WON, inside the customs value", async () => {
+    const { result, submit } = setup();
+    await submit(LOT_URL, "150");
+    const table = result.querySelector("[data-cost-table]");
+    const rowText = (id: string): string =>
+      table?.querySelector(`[data-item-id="${id}"]`)?.textContent ?? "";
+    // 25,900,000 KRW car and 2,500,000 KRW of Korean costs, both at 0.05.
+    expect(rowText("lot")).toContain("1 295 000");
+    expect(rowText("korea")).toContain("125 000");
+    expect(rowText("broker")).toContain("116 000");
+    expect(rowText("commission")).toContain("₽");
+  });
+
+  it("says out loud that the bank rate is not the CBR rate", async () => {
+    const { result, submit } = setup();
+    await submit(LOT_URL);
+    const notes = result.querySelector("[data-notes]")?.textContent ?? "";
+    expect(notes).toContain("курсу ЦБ РФ");
+    expect(notes).toContain("Банк переводит по своему курсу");
   });
 
   it("labels the button for a whatsapp messenger config", async () => {

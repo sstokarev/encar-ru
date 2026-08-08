@@ -44,7 +44,8 @@
 import { BADGE_ATTR, type PriceCandidate } from "../scan/scanner";
 import type { LoadedConfig } from "../config";
 import type { ResolvedRates } from "../rates/cbr";
-import { computeAllIn, type LotParams } from "../calc/customs";
+import { type LotParams } from "../calc/customs";
+import { computeQuote } from "../calc/pricing";
 import { createOrderButton } from "./order-button";
 import {
   ENCAR,
@@ -441,7 +442,7 @@ export function attachBreakdown(
   const doc = el.ownerDocument;
   const win = doc.defaultView;
   const { config, source } = loaded;
-  const result = computeAllIn(
+  const result = computeQuote(
     { priceKrw: candidate.krw, ...lot },
     rates,
     config,

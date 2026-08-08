@@ -35,7 +35,7 @@ import {
   extractListingParams,
   toLotDetails,
 } from "./scan/params";
-import { computeAllIn } from "./calc/customs";
+import { computeQuote } from "./calc/pricing";
 import { attachBadge } from "./ui/badge";
 import { attachBreakdown, isDetailPage } from "./ui/breakdown";
 import { loadConfig, type LoadedConfig, type WidgetConfig } from "./config";
@@ -43,7 +43,7 @@ import { DEFAULT_CONFIG } from "./config.default";
 import { resolveRates, type ResolvedRates } from "./rates/cbr";
 import { applyDictionary, showTranslateHint } from "./translate/apply";
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 
 interface EncarRuApi {
   version: string;
@@ -143,11 +143,16 @@ export function init(): void {
           ? cardLot
           : toLotDetails(extractListingParams(candidate.element));
       // The badge headlines the all-in ("под ключ") total, not the converted
-      // lot price (R1). computeAllIn is pure and cheap, and config/rates are
+      // lot price (R1). computeQuote is pure and cheap, and config/rates are
       // resolved once above, so a per-candidate call costs nothing; the
       // breakdown recomputes from the same inputs and therefore always shows
       // the identical number.
-      const allIn = computeAllIn(
+      //
+      // computeQuote, not computeAllIn: the config's WON and ladder items are
+      // the importer's model, which the engine deliberately does not know. Sent
+      // straight to computeAllIn they would trip its "unhandled item" guard and
+      // turn every badge on the page into «по запросу».
+      const allIn = computeQuote(
         { priceKrw: candidate.krw, ...lot },
         rates,
         loaded.config,

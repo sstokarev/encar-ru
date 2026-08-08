@@ -12,7 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { init } from "../src/main";
 import { toLotDetails } from "../src/scan/params";
-import { computeAllIn, AGE_BRACKET_NOTE } from "../src/calc/customs";
+import { AGE_BRACKET_NOTE } from "../src/calc/customs";
+import { computeQuote } from "../src/calc/pricing";
 import { attachBreakdown } from "../src/ui/breakdown";
 import { DEFAULT_CONFIG, type WidgetConfig } from "../src/config.default";
 import type { ResolvedRates } from "../src/rates/cbr";
@@ -88,7 +89,7 @@ describe("scan -> calc: age near a duty bracket", () => {
       { regYear: 2023, regMonth: 9, engineCc: 1998, fuel: "gasoline", estimated: false },
       NOW,
     );
-    const result = computeAllIn(
+    const result = computeQuote(
       // The power is supplied by hand: the DOM never carries one, and without
       // it the recycling line dashes and the quote is a floor whatever the age
       // says. This assertion is about the age wiring, so the lot has to be
