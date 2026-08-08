@@ -3,8 +3,8 @@ branch = "task/importer-pricing"
 worktree = "/Users/stokarev/orca/workspaces/encar-ru/importer-pricing"
 size = "normal"
 size_why = "four cost lines plus an FX rule; the model is given, the shape in code is the worker's"
-owns = ["site/config.json", "src/config.default.ts", "src/calc/pricing.ts", "test/pricing.test.ts"]
-reads = ["src/calc/customs.ts", "src/page/render.ts", "src/page/lot.ts", "docs/harness/pipeline.md"]
+owns = ["site/config.json", "src/config.default.ts", "src/calc/pricing.ts", "test/pricing.test.ts", "src/page/main.ts", "test/page.test.ts"]
+reads = ["src/calc/customs.ts", "src/page/render.ts", "docs/harness/pipeline.md"]
 accepts = ["operator opens the calc page on his own listing 41599967 and the total reads ~5,045,020 RUB with every line filled, no dashes"]
 after = []
 +++
