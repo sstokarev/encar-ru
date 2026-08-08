@@ -38,7 +38,8 @@ def merged_tasks():
         die("cannot read git log of main in %s" % REPO)
     names = set()
     for subject in out.splitlines():
-        m = re.match(r"Merge task/([\w-]+)", subject)
+        m = re.match(r"Merge task/([\w-]+)", subject) or re.match(
+            r"Merge pull request #\d+ from .*/task/([\w-]+)$", subject)
         if m:
             names.add(m.group(1))
     return names
@@ -55,9 +56,13 @@ def branch_state(name, fields, merged):
     ahead = int(ahead) if rc == 0 and ahead.isdigit() else 0
     dirty = False
     wt = fields.get("worktree")
-    if wt and Path(wt).is_dir():
-        rc, status = git(["status", "--porcelain"], cwd=wt)
-        dirty = rc == 0 and bool(status)
+    if wt:
+        wt_path = Path(wt).expanduser()
+        if not wt_path.is_absolute():
+            wt_path = REPO / wt_path  # never the invoker's cwd
+        if wt_path.is_dir():
+            rc, status = git(["status", "--porcelain"], cwd=wt_path)
+            dirty = rc == 0 and bool(status)
     if ahead > 0 or dirty:
         return "IN PROGRESS", "+%d%s" % (ahead, " dirty" if dirty else "")
     # A branch with zero unique commits is either fresh (NOT STARTED) or was

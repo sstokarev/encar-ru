@@ -37,8 +37,15 @@ def parse_header(text):
             errors.append("unparseable header line: %r" % line)
             continue
         key, raw = kv.group(1), kv.group(2).strip()
+        if key in fields:
+            errors.append("duplicate key: %s (a header states each field once)" % key)
+            continue
         if raw.startswith("["):
             items = re.findall(r'"([^"]*)"', raw)
+            if not items and re.sub(r"\s", "", raw) != "[]":
+                errors.append(
+                    'array items in %s must be double-quoted: %s' % (key, raw))
+                continue
             fields[key] = items
         else:
             m2 = re.match(r'"(.*)"$', raw)
@@ -54,12 +61,27 @@ def git(args, cwd=REPO):
     return r.returncode, r.stdout.strip()
 
 
+def merged_tasks():
+    """Task names whose merge landed on main (our subject or GitHub's default)."""
+    rc, out = git(["log", "main", "--merges", "--pretty=%s"])
+    if rc != 0:
+        return set()
+    names = set()
+    for subject in out.splitlines():
+        m = re.match(r"Merge task/([\w-]+)", subject) or re.match(
+            r"Merge pull request #\d+ from .*/task/([\w-]+)$", subject)
+        if m:
+            names.add(m.group(1))
+    return names
+
+
 def live_briefs(exclude):
-    """Other briefs whose branch currently exists (live tasks)."""
+    """Other briefs whose branch exists and has not landed (live tasks)."""
     out = []
+    merged = merged_tasks()
     tasks_dir = REPO / "docs" / "tasks"
     for p in sorted(tasks_dir.glob("*.md")):
-        if p.stem in (exclude, "README"):
+        if p.stem in (exclude, "README") or p.stem in merged:
             continue
         fields, errs = parse_header(p.read_text(encoding="utf-8"))
         if not fields:
@@ -95,6 +117,8 @@ def check(name):
     wt = fields.get("worktree")
     if wt:
         wt_path = Path(wt).expanduser()
+        if not wt_path.is_absolute():
+            wt_path = REPO / wt_path  # never the invoker's cwd
         if not wt_path.is_dir():
             errors.append("worktree does not exist: %s" % wt)
         else:
@@ -114,7 +138,9 @@ def check(name):
             errors.append("owns collides with live brief %r on: %s" % (other, sorted(overlap)))
 
     accepts = fields.get("accepts")
-    if accepts is not None and (not isinstance(accepts, list) or not all(a for a in accepts)):
+    if accepts is not None and (
+        not isinstance(accepts, list) or not accepts or not all(a for a in accepts)
+    ):
         errors.append("accepts must be a non-empty string array when present")
 
     return errors

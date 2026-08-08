@@ -93,6 +93,29 @@ class Board(unittest.TestCase):
         r = board(self.repo)
         self.assertIn("ANOMALY", self.line(r.stdout, "alpha"))
 
+    def test_github_default_pr_merge_subject_is_done(self):
+        brief(self.repo, "alpha")
+        run(self.repo, "git checkout -q -b task/alpha")
+        run(self.repo, GITC + " commit -q --allow-empty -m work")
+        run(self.repo, "git checkout -q main")
+        run(self.repo, GITC + ' merge --no-ff task/alpha '
+            '-m "Merge pull request #7 from sstokarev/task/alpha"')
+        r = board(self.repo)
+        self.assertIn("DONE", self.line(r.stdout, "alpha"))
+
+    def test_dirty_worktree_is_in_progress(self):
+        wt = Path(self.tmp) / "wt-alpha"
+        run(self.repo, 'git worktree add -q "%s" -b task/alpha' % wt)
+        (wt / "junk.txt").write_text("dirt")
+        (self.repo / "docs" / "tasks" / "alpha.md").write_text(
+            '+++\nbranch = "task/alpha"\nworktree = "%s"\nsize = "small"\n'
+            'size_why = "t"\nowns = []\nreads = []\n+++\ngap\n' % wt,
+            encoding="utf-8",
+        )
+        r = board(self.repo)
+        self.assertIn("IN PROGRESS", self.line(r.stdout, "alpha"))
+        self.assertIn("dirty", self.line(r.stdout, "alpha"))
+
     def test_not_a_repo_exits_nonzero_and_says_where(self):
         bare = Path(self.tmp) / "bare"
         (bare / "docs" / "tasks").mkdir(parents=True)

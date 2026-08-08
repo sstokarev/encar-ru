@@ -122,7 +122,9 @@ On `WORKER_DONE`:
    task/<name>: ..."` — or for a PR, `gh pr merge <n> --merge --subject "Merge
    task/<name>: ..."`. A fast-forward is invisible to the board.
 6. Retire: `orca worktree rm --worktree <selector> --force`, then
-   `git worktree prune`. Check for untracked build output first.
+   `git worktree prune` and `git branch -d task/<name>`. Check for untracked
+   build output first. A surviving branch keeps the brief "live" and blocks
+   its `owns` paths for every future brief.
 7. **Sort every proposal it filed, the hour it lands** (verdict line per
    `docs/proposals/README.md`). One unsorted proposal cost three
    re-discoveries in two days in the previous project.

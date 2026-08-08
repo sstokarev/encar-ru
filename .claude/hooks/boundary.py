@@ -4,7 +4,10 @@
 v1 covers file tools only (Write, Edit, NotebookEdit). Bash/git coverage is a
 deferred gate - rf-bot's measured lesson is that it needs triple resolution of
 `-C` / `--git-dir` / `cd` to be honest, and a half-gate teaches the second
-spelling. Add it when the first violation happens.
+spelling. Add it when the first violation happens. Known v1 hole, same
+deferral: identity is the session cwd, so a worker that Bash-cd's into the
+main checkout reclassifies itself as architect - the Bash gate closes that
+too when it comes.
 
 The anchor is git's common dir, NOT this file's path: every worktree carries
 its own copy of this hook, so a __file__ anchor would name the worktree itself
@@ -59,8 +62,11 @@ def main():
     except ValueError:
         pass
 
+    target_path = Path(target)
+    if not target_path.is_absolute():
+        target_path = cwd / target_path  # resolve against the SESSION cwd
     try:
-        Path(target).resolve().relative_to(main_dir)
+        target_path.resolve().relative_to(main_dir)
     except ValueError:
         return 0  # write goes elsewhere (its own worktree): fine
 

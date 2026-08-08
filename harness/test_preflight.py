@@ -110,6 +110,47 @@ class Preflight(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("unknown field: rank", r.stdout)
 
+    def test_unquoted_array_items_refused_not_swallowed(self):
+        wt = self.add_worktree()
+        header = VALID.format(wt=wt).replace('owns = ["src/a.ts"]', "owns = [src/a.ts]")
+        write_brief(self.repo, "x", header)
+        r = preflight(self.repo, "x")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("double-quoted", r.stdout)
+
+    def test_empty_array_still_legal(self):
+        wt = self.add_worktree()
+        header = VALID.format(wt=wt).replace('owns = ["src/a.ts"]', "owns = []")
+        write_brief(self.repo, "x", header)
+        r = preflight(self.repo, "x")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_duplicate_key_refused(self):
+        wt = self.add_worktree()
+        write_brief(self.repo, "x", VALID.format(wt=wt) + '\nowns = ["src/b.ts"]')
+        r = preflight(self.repo, "x")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("duplicate key: owns", r.stdout)
+
+    def test_empty_accepts_refused(self):
+        wt = self.add_worktree()
+        write_brief(self.repo, "x", VALID.format(wt=wt) + "\naccepts = []")
+        r = preflight(self.repo, "x")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("accepts", r.stdout)
+
+    def test_merged_brief_no_longer_blocks_owns(self):
+        wt = self.add_worktree()
+        write_brief(self.repo, "x", VALID.format(wt=wt))
+        run(wt, "git -c user.email=t@t -c user.name=t commit -q --allow-empty -m work")
+        run(self.repo, "git -c user.email=t@t -c user.name=t "
+            'merge --no-ff -q task/x -m "Merge task/x: done"')
+        wt2 = self.add_worktree(branch="task/y", name="wt-y")
+        header2 = VALID.format(wt=wt2).replace("task/x", "task/y")
+        write_brief(self.repo, "y", header2)
+        r = preflight(self.repo, "y")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
     def test_pipeline_doc_budget(self):
         doc = HARNESS.parent / "docs" / "harness" / "pipeline.md"
         if doc.exists():
