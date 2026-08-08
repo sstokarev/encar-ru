@@ -1,7 +1,7 @@
 ---
 title: "feat: Standalone calc page (site/calc.html)"
 type: feat
-status: active
+status: completed
 date: 2026-08-08
 origin: docs/tasks/calc-page.md
 ---
