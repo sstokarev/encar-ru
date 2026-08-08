@@ -43,3 +43,9 @@ fix, so `test/pricing.test.ts`'s pin on 5 045 020 stays green.
 If the label is judged too long for a phone-width row, the alternative is the
 existing per-line note slot (`[data-line-note]` in `src/page/render.ts`)
 rather than dropping the fact.
+
+> **Verdict:** taken — the operator's answer settles it: СБКТС/ЭПТС is inside
+> the fixed broker line, so there is no separate row to restore. Already true
+> in the landed config (no `sbkts` item). Nothing to build; this proposal is
+> the record of WHY the line is absent, which is exactly what the next person
+> will ask.

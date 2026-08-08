@@ -44,3 +44,9 @@ inherit}`) with the same flaw — that one is on a tap target rather than a
 text input, so it costs weight and size, not a zoom.
 
 Found by the code review of `task/landing`, 2026-08-08.
+
+> **Verdict:** taken — relayed into task/importer-pricing round 2 the hour it
+> was filed (it owns site/calc.html). A focused input under 16px zooms iOS
+> Safari, and the operator's clients arrive from a Telegram link on a phone:
+> the page jumps the moment a client taps the field. site/index.html carries
+> the same defect and rides the next dispatch that touches it.
