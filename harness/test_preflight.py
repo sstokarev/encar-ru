@@ -97,7 +97,15 @@ class Preflight(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("behind main", r.stdout)
 
-    def test_missing_worktree_refused(self):
+    def test_missing_worktree_before_dispatch_passes(self):
+        # Orca creates the worktree at worker-start; pre-dispatch the path
+        # cannot exist yet and the gate must still pass.
+        write_brief(self.repo, "x", VALID.format(wt=Path(self.tmp) / "nope"))
+        r = preflight(self.repo, "x")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_missing_worktree_with_live_branch_refused(self):
+        run(self.repo, "git branch task/x")
         write_brief(self.repo, "x", VALID.format(wt=Path(self.tmp) / "nope"))
         r = preflight(self.repo, "x")
         self.assertEqual(r.returncode, 1)

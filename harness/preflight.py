@@ -120,7 +120,15 @@ def check(name):
         if not wt_path.is_absolute():
             wt_path = REPO / wt_path  # never the invoker's cwd
         if not wt_path.is_dir():
-            errors.append("worktree does not exist: %s" % wt)
+            # Orca creates the worktree at worker-start, after this gate: a
+            # missing directory is normal pre-dispatch. Once the task branch
+            # exists the task is live and a missing path is a stale brief.
+            rc, _ = git(["rev-parse", "--verify", "--quiet",
+                         fields.get("branch", "")])
+            if rc == 0:
+                errors.append(
+                    "branch %s is live but worktree does not exist: %s"
+                    % (fields.get("branch"), wt))
         else:
             rc, head = git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=wt_path)
             if rc != 0:
