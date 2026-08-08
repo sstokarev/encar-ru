@@ -248,9 +248,11 @@ describe("WON costs are folded in before the conversion", () => {
     // Both renderers draw every ROW under «по запросу» and replace only the
     // total. An unsplit row would print the car PLUS 2 500 000 KRW of freight
     // under the label «Цена лота» — 5.6% high on the one line the client can
-    // check against the encar page at a glance.
+    // check against the encar page at a glance. (An EV no longer refuses —
+    // tks-parity gave it its own track — so the refusal here is a malformed
+    // power reading, the surviving onRequest case with a usable price.)
     const refused = computeQuote(
-      { ...quoteLot(), fuel: "electric" },
+      { ...quoteLot(), powerHp: -265 },
       QUOTE_RATES,
       DEFAULT_CONFIG,
     );
@@ -597,14 +599,24 @@ describe("the engine's honesty rules survive the model", () => {
     );
   });
 
-  it("still refuses an EV outright", () => {
+  it("prices an EV on its own track: a floor without the 30-min power", () => {
+    // EV specification since tks-parity: пошлина 15% + акциз + НДС +
+    // утильсбор по 30-минутной мощности. Without that power (no catalog
+    // match) акциз/НДС/утильсбор dash and the quote is a floor, not a
+    // refusal; the operator's model lines (korea, broker, commission) still
+    // apply on top of it.
     const ev = computeQuote(
       { ...quoteLot(), fuel: "electric" },
       QUOTE_RATES,
       DEFAULT_CONFIG,
     );
-    expect(ev.precision).toBe("onRequest");
-    expect(ev.items.find((item) => item.id === "commission")).toBeUndefined();
+    expect(ev.precision).toBe("partial");
+    expect(amount(ev.items, "duty")).toBeGreaterThan(0);
+    expect(
+      ev.items.find(
+        (item) => item.id === "excise" && item.rub === undefined,
+      ),
+    ).toBeDefined();
   });
 
   it("still refuses a lot whose power was read as nonsense", () => {

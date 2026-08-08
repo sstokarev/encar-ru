@@ -382,16 +382,24 @@ describe("breakdown panel", () => {
     expect(panel.getAttribute("data-precision")).toBe("partial");
   });
 
-  it("marks the total 'on request' for an EV lot", () => {
+  it("floors an EV lot: duty from the price, акциз/НДС/утильсбор dash", () => {
+    // EV specification since the tks-parity task: the EV track is пошлина
+    // 15% + акциз + НДС + утильсбор. Without the motor's 30-minute power
+    // (the overlay never has it) the three power lines dash and the total is
+    // a floor; the duty needs only the price and always computes.
     const host = attachDirect(CLEAN_CONFIG, KRW, "remote", {
       ageYears: 2,
       fuel: "electric",
     });
     toggleOf(host).click();
-    expect(rowValue(host, "total")).toBe("расчёт по запросу");
-    expect(
-      panelOf(host).querySelector('[data-item-id="duty"]'),
-    ).toBeNull();
+    // duty = 15% × 500,000 = 75,000
+    expect(rowValue(host, "duty")).toBe("75 000 ₽");
+    expect(rowValue(host, "excise")).toBe("—");
+    expect(rowValue(host, "vat")).toBe("—");
+    expect(rowValue(host, "recycling")).toBe("—");
+    // 500,000 + 100,000 + 50,000 + 75,000 + 4,924 clearance
+    expect(rowValue(host, "total")).toBe("от 729 924 ₽");
+    expect(panelOf(host).getAttribute("data-precision")).toBe("partial");
   });
 
   it("keeps the breakdown host untranslatable and idempotent", () => {

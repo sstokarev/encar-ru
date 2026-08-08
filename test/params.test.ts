@@ -441,7 +441,13 @@ describe("precision wiring (AE1)", () => {
     expect(panel.querySelector("[data-approx-reason]")).toBeNull();
   });
 
-  it("an EV card stays on-request per U6", async () => {
+  it("an EV card floors: duty computes from the price, power lines dash", async () => {
+    // EV behavior specification since the tks-parity task: EVs are no longer
+    // refused. The 15% ЕТТ duty needs only the price, so it computes even on
+    // the overlay, which never has the 30-minute motor power; акциз, НДС and
+    // утильсбор need that power and dash, making the total an honest floor
+    // ("от N ₽"). The only refusals left are an unusable price or a malformed
+    // param (pinned in test/calc.test.ts).
     window.history.replaceState(null, "", DETAIL_PATH);
     loadFixture(CARD_HTML);
     for (const script of Array.from(document.querySelectorAll("script"))) {
@@ -458,11 +464,9 @@ describe("precision wiring (AE1)", () => {
 
     const hosts = badgeHosts();
     expect(hosts.length).toBe(1);
-    // EV customs are quoted manually: the badge shows the short marker, the
-    // breakdown its long form — neither invents a number.
-    expect(badgeText(hosts[0]!)).toBe("по запросу");
+    expect(badgeText(hosts[0]!)).toMatch(/^от [\d\s ]+₽$/);
     const panel = breakdownPanel();
-    expect(panel.getAttribute("data-precision")).toBe("onRequest");
-    expect(totalValue(panel)).toBe("расчёт по запросу");
+    expect(panel.getAttribute("data-precision")).toBe("partial");
+    expect(totalValue(panel)).toBe(badgeText(hosts[0]!));
   });
 });

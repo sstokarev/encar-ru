@@ -425,13 +425,85 @@ describe("recycling fee: displacement class x power bracket x age", () => {
     expect(result.precision).toBe("partial");
   });
 
-  it("renders a dash for a hybrid even when a power figure is known", () => {
+  it("renders a dash for a hybrid with one power figure and no kind", () => {
     // For a parallel hybrid the decree adds the electric motor's 30-minute
-    // power to the ICE power; the listing gives at most one of the two.
+    // power to the ICE power; with either figure (or the kind) missing the
+    // fee line dashes.
     const result = compute({ ...FULL_LOT, fuel: "hybrid" });
     expect(isDash(result, "recycling")).toBe(true);
     expect(isDash(result, "duty")).toBe(false);
     expect(result.precision).toBe("partial");
+  });
+
+  it("dashes a hybrid with both powers but an unknown kind", () => {
+    // Without the kind the routing itself is unknown: a sequential hybrid
+    // would not even be on this track.
+    const result = compute({
+      ...FULL_LOT,
+      fuel: "hybrid",
+      powerHp: 152,
+      electricHp30min: 20,
+    });
+    expect(isDash(result, "recycling")).toBe(true);
+    expect(result.precision).toBe("partial");
+  });
+
+  it("computes a parallel hybrid's fee from the combined power", () => {
+    // 152 ICE + 20 electric = 172 л.с. > 160 kills the льгота; class ≤2000cc,
+    // bracket ≤190 л.с., <3 лет -> 900 000 (TEST_CUSTOMS).
+    const result = compute({
+      ...FULL_LOT,
+      fuel: "hybrid",
+      hybridKind: "parallel",
+      powerHp: 152,
+      electricHp30min: 20,
+    });
+    expect(itemRub(result, "recycling")).toBe(900_000);
+    expect(result.precision).toBe("exact");
+  });
+
+  it("keeps the льгота for a parallel hybrid under both caps combined", () => {
+    // 120 + 30 = 150 л.с. ≤ 160 and 2000 см³ ≤ 3000 -> reduced 3 400 (<3y).
+    const result = compute({
+      ...FULL_LOT,
+      fuel: "hybrid",
+      hybridKind: "parallel",
+      powerHp: 120,
+      electricHp30min: 30,
+    });
+    expect(itemRub(result, "recycling")).toBe(3_400);
+  });
+
+  it("pins the combined-power льгота boundary at exactly 160 л.с.", () => {
+    const at = (iceHp: number, electricHp: number): number =>
+      itemRub(
+        compute({
+          ...FULL_LOT,
+          fuel: "hybrid",
+          hybridKind: "parallel",
+          powerHp: iceHp,
+          electricHp30min: electricHp,
+        }),
+        "recycling",
+      );
+    expect(at(130, 30)).toBe(3_400); // 160 combined: льгота holds
+    expect(at(130, 31)).toBe(900_000); // 161: full grid, ≤190 bracket, <3y
+  });
+
+  it("names the missing duty params, not power, for a hybrid with both powers", () => {
+    // Both powers known, age unknown: the fee line's note must ask for the
+    // lot params — claiming the power is missing would mislead the manager.
+    const result = compute({
+      ...FULL_LOT,
+      ageYears: undefined,
+      fuel: "hybrid",
+      hybridKind: "parallel",
+      powerHp: 120,
+      electricHp30min: 30,
+    });
+    const recycling = line(result, "recycling");
+    expect(isUnknownLine(recycling)).toBe(true);
+    expect(recycling.note).toBe("нужны объём двигателя и год выпуска");
   });
 });
 
@@ -743,28 +815,152 @@ describe("present-but-invalid params refuse; missing ones are a floor", () => {
   });
 });
 
+/**
+ * EV / sequential-hybrid track (tks.ru parity). Unlike the rest of the file
+ * these tests compute against the REAL DEFAULT_EV_TRACK_RATES — the tables
+ * live in customs.ts (not in config, until the importer-pricing task frees
+ * the config files), so pinning them here does double duty: routing tests
+ * and boundary pins for the primary-verified values (ПП №1291 ред.
+ * 06.02.2026, ст.193 НК in ред. 425-ФЗ, ЕТТ 15%).
+ *
+ * Hand-math, same FX as above (lotRub = 1 000 000 for the 20M KRW lot):
+ *   duty = 15% × 1 000 000 = 150 000
+ *   НДС  = 22% × (1 000 000 + 150 000 + акциз)
+ *   clearance(1 000 000) = 4 924
+ */
+describe("EV / sequential hybrid track", () => {
+  const EV_LOT: LotParams = {
+    priceKrw: 20_000_000,
+    ageYears: 2,
+    fuel: "electric",
+    electricHp30min: 76, // Ioniq 5 58 kWh (drom, 2026-08-08)
+  };
+
+  it("computes the full совокупный платёж for an EV with known power", () => {
+    const result = compute(EV_LOT);
+    expect(result.precision).toBe("exact");
+    expect(itemRub(result, "duty")).toBe(150_000);
+    // 76 л.с. ≤ 90 → ставка 0 ₽/л.с.: the excise line is a computed zero,
+    // not a dash — the tax exists and is legitimately nil.
+    expect(itemRub(result, "excise")).toBe(0);
+    expect(itemRub(result, "vat")).toBe(253_000); // 22% × 1 150 000
+    expect(itemRub(result, "recycling")).toBe(3_400); // льгота ≤80 л.с., <3y
+    expect(itemRub(result, "clearance")).toBe(4_924);
+    // 1 000 000 + 150 000 + 0 + 253 000 + 3 400 + 4 924
+    expect(result.totalRub).toBe(1_411_324);
+  });
+
+  it("prices a powerful EV on the full grid and higher excise brackets", () => {
+    const result = compute({ ...EV_LOT, electricHp30min: 320 });
+    // акциз: 300 < 320 ≤ 400 → 1711 ₽/л.с. × 320 = 547 520
+    expect(itemRub(result, "excise")).toBe(547_520);
+    // НДС: 22% × (1 000 000 + 150 000 + 547 520) = 373 454.4 → 373 454
+    expect(itemRub(result, "vat")).toBe(373_454);
+    // утильсбор: >280 л.с., <3 лет → 3 648 000 (ПП №1291, 2026 column)
+    expect(itemRub(result, "recycling")).toBe(3_648_000);
+    expect(result.totalRub).toBe(
+      1_000_000 + 150_000 + 547_520 + 373_454 + 3_648_000 + 4_924,
+    );
+  });
+
+  it("pins every excise bracket boundary (ст.193 НК, 2026)", () => {
+    const exciseAt = (hp: number): number =>
+      itemRub(compute({ ...EV_LOT, electricHp30min: hp }), "excise");
+    expect(exciseAt(90)).toBe(0);
+    expect(exciseAt(91)).toBe(5_824); // 64 × 91
+    expect(exciseAt(150)).toBe(9_600); // 64 × 150
+    expect(exciseAt(151)).toBe(92_563); // 613 × 151
+    expect(exciseAt(200)).toBe(122_600); // 613 × 200
+    expect(exciseAt(201)).toBe(201_804); // 1004 × 201
+    expect(exciseAt(300)).toBe(301_200); // 1004 × 300
+    expect(exciseAt(301)).toBe(515_011); // 1711 × 301
+    expect(exciseAt(400)).toBe(684_400); // 1711 × 400
+    expect(exciseAt(401)).toBe(710_171); // 1771 × 401
+    expect(exciseAt(500)).toBe(885_500); // 1771 × 500
+    expect(exciseAt(501)).toBe(916_329); // 1829 × 501
+  });
+
+  it("dashes акциз, НДС and утильсбор for a sequential hybrid without power", () => {
+    const result = compute({
+      priceKrw: 20_000_000,
+      ageYears: 2,
+      fuel: "hybrid",
+      hybridKind: "sequential",
+    });
+    expect(result.precision).toBe("partial");
+    expect(itemRub(result, "duty")).toBe(150_000);
+    expect(isDash(result, "excise")).toBe(true);
+    expect(isDash(result, "vat")).toBe(true);
+    expect(isDash(result, "recycling")).toBe(true);
+  });
+
+  it("pins the льгота boundary: 80 л.с. reduced, 81 on the grid", () => {
+    expect(
+      itemRub(compute({ ...EV_LOT, electricHp30min: 80 }), "recycling"),
+    ).toBe(3_400);
+    expect(
+      itemRub(
+        compute({ ...EV_LOT, electricHp30min: 80, ageYears: 4 }),
+        "recycling",
+      ),
+    ).toBe(5_200);
+    // 81 л.с. → bracket ≤100: 991 200 (<3y) / 1 641 600 (≥3y)
+    expect(
+      itemRub(compute({ ...EV_LOT, electricHp30min: 81 }), "recycling"),
+    ).toBe(991_200);
+    expect(
+      itemRub(
+        compute({ ...EV_LOT, electricHp30min: 81, ageYears: 4 }),
+        "recycling",
+      ),
+    ).toBe(1_641_600);
+  });
+
+  it("routes a sequential hybrid onto the EV track without displacement", () => {
+    const result = compute({
+      priceKrw: 20_000_000,
+      ageYears: 2,
+      fuel: "hybrid",
+      hybridKind: "sequential",
+      electricHp30min: 150,
+    });
+    expect(result.precision).toBe("exact");
+    expect(itemRub(result, "duty")).toBe(150_000); // 15%, no cc needed
+    expect(itemRub(result, "excise")).toBe(9_600); // 64 × 150
+    expect(itemRub(result, "vat")).toBe(255_112); // 22% × 1 159 600
+    expect(itemRub(result, "recycling")).toBe(1_560_000); // ≤160 bracket, <3y
+  });
+
+  it("dashes акциз, НДС and утильсбор without the 30-minute power", () => {
+    const result = compute({ ...EV_LOT, electricHp30min: undefined });
+    expect(result.precision).toBe("partial");
+    expect(itemRub(result, "duty")).toBe(150_000); // duty needs price only
+    expect(isDash(result, "excise")).toBe(true);
+    // НДС on a smaller base would print a number that is not the tax.
+    expect(isDash(result, "vat")).toBe(true);
+    expect(isDash(result, "recycling")).toBe(true);
+    expect(itemRub(result, "clearance")).toBe(4_924);
+    expect(result.totalRub).toBe(1_154_924); // floor: lot + duty + clearance
+  });
+
+  it("dashes only утильсбор when the age is missing", () => {
+    const result = compute({ ...EV_LOT, ageYears: undefined });
+    expect(result.precision).toBe("partial");
+    expect(isDash(result, "recycling")).toBe(true);
+    expect(itemRub(result, "excise")).toBe(0);
+    expect(itemRub(result, "vat")).toBe(253_000);
+  });
+
+  it("refuses a malformed 30-minute power outright", () => {
+    for (const electricHp30min of [0, -5, Number.NaN]) {
+      expect(compute({ ...EV_LOT, electricHp30min }).precision).toBe(
+        "onRequest",
+      );
+    }
+  });
+});
+
 describe("degradation to 'on request'", () => {
-  it("EV stays on request: different rules entirely", () => {
-    const result = compute({
-      priceKrw: 20_000_000,
-      ageYears: 2,
-      fuel: "electric",
-    });
-    expect(result.precision).toBe("onRequest");
-    expect(result.items.some((item) => item.id === "duty")).toBe(false);
-  });
-
-  it("EV stays on request even when displacement and power are present", () => {
-    const result = compute({
-      priceKrw: 20_000_000,
-      ageYears: 2,
-      engineCc: 100,
-      powerHp: 150,
-      fuel: "electric",
-    });
-    expect(result.precision).toBe("onRequest");
-  });
-
   it("an unusable lot price is on request, not a partial total", () => {
     for (const priceKrw of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       const result = compute({ ...FULL_LOT, priceKrw });
