@@ -1,0 +1,69 @@
+name: Tariff watch
+
+# Weekly, not annually. The recycling fee is re-indexed on 1 January, but the
+# 01.12.2025 reform (ПП РФ № 1713) landed a month before that date — a yearly
+# check would have quoted the old fee for eleven months.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# One branch, one open proposal: a second unaccepted change must update the
+# existing PR rather than race it.
+concurrency:
+  group: rates-watch
+  cancel-in-progress: false
+
+env:
+  BRANCH: rates-watch/proposal
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Exit 1 means a source could not be read or an extractor found fewer
+      # rows than the page carries. That fails the job on purpose: a watch that
+      # stopped watching must not look like a config that is correct.
+      - name: Check the published rates
+        id: check
+        run: node scripts/check-rates.mjs --body "$RUNNER_TEMP/pr-body.md"
+
+      - name: Propose the change
+        if: steps.check.outputs.outcome == 'changed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add docs/harness/rates-source.md
+          git commit -m "chore(rates): the published tariffs moved" || {
+            echo "Nothing to commit; the observation block already records this."
+            exit 0
+          }
+          git push --force-with-lease origin "$BRANCH"
+          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/pr-body.md"
+          else
+            gh pr create --base main --head "$BRANCH" \
+              --title "Tariff watch: the published rates moved" \
+              --body-file "$RUNNER_TEMP/pr-body.md"
+          fi
+
+      # The report is worth reading on a clean run too: it prints which blocks
+      # are watched by number and which are not.
+      - name: Publish the report
+        if: always()
+        run: cat "$RUNNER_TEMP/pr-body.md" >> "$GITHUB_STEP_SUMMARY" || true
