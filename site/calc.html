@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Расчёт цены под ключ — Encar по-русски</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#f7f7f8;color:#1a1a1a;line-height:1.5}
+  .wrap{max-width:640px;margin:0 auto;padding:24px 16px 64px}
+  h1{font-size:1.5rem}
+  h2{font-size:1.25rem;margin:0 0 8px}
+  .card{background:#fff;border-radius:12px;padding:16px 20px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .muted{color:#666;font-size:.9rem}
+  form[data-calc-form]{display:flex;flex-wrap:wrap;gap:10px}
+  input[data-calc-url]{flex:1 1 260px;min-height:44px;box-sizing:border-box;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font:1rem inherit;font-family:inherit}
+  button[data-calc-submit]{min-height:44px;padding:12px 20px;border:0;border-radius:8px;background:#c00;color:#fff;font:600 1rem inherit;font-family:inherit;cursor:pointer}
+  button[data-calc-submit]:disabled{opacity:.6;cursor:progress}
+  [data-calc-result][data-loading]{opacity:.5}
+  [data-error]{background:#fdecec;border:1px solid #f2b8b8;border-radius:12px;padding:12px 16px;margin:12px 0}
+  [data-loading-card]{background:#fff;border-radius:12px;padding:16px 20px;margin:12px 0;color:#666;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  [data-demo-banner]{background:#fff8e6;border:1px solid #f0dfa8;border-radius:12px;padding:10px 16px;margin:0 0 12px;font-size:.95rem}
+  [data-result]{background:#fff;border-radius:12px;padding:16px 20px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  [data-photos]{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+  [data-photo-main]{width:100%;border-radius:8px;display:block}
+  [data-photo-thumb]{width:calc(25% - 6px);border-radius:6px;display:block}
+  [data-specs]{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;margin:0 0 16px}
+  [data-specs] dt{color:#666}
+  [data-specs] dd{margin:0}
+  [data-cost-table]{border-top:1px solid #eee;margin-bottom:12px}
+  [data-row]{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid #eee}
+  [data-label]{color:#444}
+  [data-line-note]{display:block;color:#999;font-size:.8rem}
+  [data-value]{white-space:nowrap;font-variant-numeric:tabular-nums;text-align:right}
+  [data-unknown] [data-label],[data-unknown] [data-value]{color:#999}
+  [data-row="total"]{font-weight:700;font-size:1.05rem;border-bottom:0;border-top:2px solid #ddd}
+  [data-row="total"] [data-value]{color:#c00}
+  [data-notes]{margin:8px 0 16px}
+  [data-calc-note],[data-embedded-marker],[data-preliminary-rate],[data-rejected-rate]{color:#8a6d1a;font-size:.85rem;margin-top:4px}
+  [data-rate-date],[data-commission-note]{color:#666;font-size:.85rem;margin-top:4px}
+  [data-messenger-button]{display:flex;align-items:center;justify-content:center;min-height:50px;padding:12px 16px;border-radius:8px;background:#c00;color:#fff;font-weight:600;text-align:center;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Цена под ключ в РФ</h1>
+  <p>Вставьте ссылку на автомобиль с encar.com — покажем фото, характеристики и полный расчёт стоимости в рублях с таможенными платежами.</p>
+  <div class="card">
+    <!-- novalidate: браузерная валидация type=url глотала submit до нашего
+         обработчика — ошибка формата показывается самой страницей. -->
+    <form data-calc-form novalidate>
+      <input data-calc-url type="url" inputmode="url" required
+             placeholder="https://fem.encar.com/cars/detail/…"
+             aria-label="Ссылка на объявление encar.com">
+      <button data-calc-submit type="submit">Рассчитать</button>
+    </form>
+    <p class="muted">Расчёт предварительный — итоговую цену подтверждает менеджер перед заказом.</p>
+  </div>
+  <div data-calc-result aria-live="polite"></div>
+</div>
+<script src="calc.js"></script>
+</body>
+</html>
