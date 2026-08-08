@@ -194,15 +194,24 @@ describe("calc page", () => {
     expect(second.result.querySelector("[data-result]")).toBeNull();
   });
 
-  it("renders the on-request marker for an EV (no numeric total)", async () => {
+  it("floors an EV without power data: duty computes, total is «от N ₽»", async () => {
+    // EV specification since the tks-parity task: EVs compute on their own
+    // track (пошлина 15% + акциз + НДС + утильсбор по 30-мин мощности). The
+    // page has no catalog wired yet, so the power lines dash and the total
+    // is an honest floor — no longer «по запросу», which is reserved for an
+    // unusable price or malformed params.
     const { result, submit } = setup({
       car: { ...FIXTURE_CAR, fuelName: "전기", displacementCc: null },
     });
     await submit(LOT_URL);
     const total =
       result.querySelector('[data-row="total"]')?.textContent ?? "";
-    expect(total).toContain("расчёт по запросу");
-    expect(total).not.toContain("₽");
+    expect(total).toContain("от ");
+    expect(total).toContain("₽");
+    const duty =
+      result.querySelector('[data-item-id="duty"] [data-value]')?.textContent ??
+      "";
+    expect(duty).toContain("₽");
   });
 
   it("marks embedded config and demo data visibly", async () => {
