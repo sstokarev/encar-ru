@@ -1,0 +1,121 @@
+name: Tariff watch
+
+# Weekly, not annually. The recycling fee is re-indexed on 1 January, but the
+# 01.12.2025 reform (ПП РФ № 1713) landed a month before that date — a yearly
+# check would have quoted the old fee for eleven months.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# One branch, one open proposal: a second unaccepted change must update the
+# existing PR rather than race it.
+concurrency:
+  group: rates-watch
+  cancel-in-progress: false
+
+env:
+  BRANCH: rates-watch/proposal
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    # A hung source must not sit in the concurrency group for the six hours
+    # Actions allows by default and push the next weekly run behind it.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Exit 1 means a source could not be read or an extractor found fewer
+      # rows than the page carries. That fails the job on purpose: a watch that
+      # stopped watching must not look like a config that is correct.
+      - name: Check the published rates
+        id: check
+        run: node scripts/check-rates.mjs --body "$RUNNER_TEMP/pr-body.md"
+
+      # The feed watch dedupes against the observation block and measures the
+      # window it has already read. If that baseline only advanced when a
+      # human merged a proposal, a quiet stretch longer than the feed's ~7-week
+      # page would make every run claim a skipped window. So a clean run
+      # records its reading straight to main: one bot-authored log line in this
+      # job's own file, carrying no tariff decision. Best-effort — if main is
+      # protected or someone pushed meanwhile, the watch is still correct, it
+      # just keeps the older baseline.
+      - name: Record a clean reading
+        if: steps.check.outputs.outcome == 'ok'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/harness/rates-source.md
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(rates): record a clean tariff reading"
+          git push origin "HEAD:${{ github.ref_name }}" || {
+            echo "::warning::could not record the reading on ${{ github.ref_name }};"
+            echo "the next run will compare against the older baseline."
+          }
+
+      - name: Propose the change
+        if: steps.check.outputs.outcome == 'changed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BOT="github-actions[bot]"
+          git config user.name "$BOT"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # actions/checkout fetches only the default branch, so without this
+          # explicit refspec there is no refs/remotes/origin/$BRANCH for the
+          # lease to compare against and --force-with-lease refuses with
+          # "stale info" from the SECOND run onwards — reproduced in a bare
+          # repo, and it would have turned this job red every week after the
+          # first change, freezing the PR while crying wolf.
+          git fetch --no-tags origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" \
+            2>/dev/null || true
+
+          # The lease alone would happily clobber a human's work: we just
+          # fetched, so the lease always matches. If someone has committed to
+          # the proposal branch, that is a conversation, not something to
+          # overwrite — stop and say so.
+          if git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; then
+            AUTHOR=$(git log -1 --format='%an' "refs/remotes/origin/$BRANCH")
+            if [ "$AUTHOR" != "$BOT" ]; then
+              echo "::error::$BRANCH was last committed to by $AUTHOR, not $BOT."
+              echo "Refusing to force-push over human work. Resolve the open PR first."
+              exit 1
+            fi
+          fi
+
+          git checkout -B "$BRANCH"
+          git add docs/harness/rates-source.md
+          git commit -m "chore(rates): the published tariffs moved" || {
+            echo "Nothing to commit; the observation block already records this."
+            exit 0
+          }
+          git push --force-with-lease origin "$BRANCH"
+          # --state open matters: without it `gh pr view` resolves the MERGED
+          # proposal from a previous cycle, and the next change would be edited
+          # into a closed PR while this job reported success.
+          if gh pr view "$BRANCH" --state open --json number >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/pr-body.md"
+          else
+            gh pr create --base main --head "$BRANCH" \
+              --title "Tariff watch: the published rates moved" \
+              --body-file "$RUNNER_TEMP/pr-body.md"
+          fi
+
+      # The report is worth reading on a clean run too: it prints which blocks
+      # are watched by number and which are not.
+      - name: Publish the report
+        if: always()
+        run: cat "$RUNNER_TEMP/pr-body.md" >> "$GITHUB_STEP_SUMMARY" || true
