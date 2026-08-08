@@ -56,8 +56,8 @@ exactly on the cars they came for. The operator's directive: «нам нужно
 **Tariff tracks (физлицо, личное пользование)**
 
 - R1. An EV lot computes пошлина (ЕТТ ad valorem) + акциз (руб/л.с.) + НДС
-  20% instead of «по запросу»; exact rates are pinned during planning from
-  official sources.
+  (22% since 01.01.2026, ФЗ №425-ФЗ) instead of «по запросу»; exact rates are
+  pinned from official sources.
 - R2. A sequential hybrid computes on the same track as an EV; the catalog's
   hybrid-type field decides sequential vs parallel.
 - R3. A parallel hybrid keeps the №107 единые ставки duty by displacement,
