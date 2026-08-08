@@ -3,9 +3,9 @@ branch = "task/importer-pricing"
 worktree = "/Users/stokarev/orca/workspaces/encar-ru/importer-pricing"
 size = "normal"
 size_why = "four cost lines plus an FX rule; the model is given, the shape in code is the worker's"
-owns = ["site/config.json", "src/config.default.ts", "src/calc/pricing.ts", "test/pricing.test.ts"]
-reads = ["src/calc/customs.ts", "src/page/render.ts", "src/page/lot.ts", "docs/harness/pipeline.md"]
-accepts = ["operator opens the calc page on his own listing 41599967 and the total reads ~5,045,020 RUB with every line filled, no dashes"]
+owns = ["site/config.json", "src/config.default.ts", "src/calc/pricing.ts", "test/pricing.test.ts", "src/page/main.ts", "test/page.test.ts", "src/config.ts", "test/config-file.test.ts", "site/calc.html"]
+reads = ["src/calc/customs.ts", "src/page/render.ts", "docs/harness/pipeline.md"]
+accepts = ["operator opens the calc page on a live lot (42217972 / 42319113 / 42512433, his pick) and every cost line carries a number with the CBR footnote visible"]
 after = []
 +++
 
@@ -35,7 +35,17 @@ registered 01.2023, built 11.2022, 47,800 km):
 - There is **no СБКТС/ЭПТС line** — his quote is «под ключ во Владивостоке».
   Ask him in your pane whether it disappears or moves.
 
-Make that lot a fixture test that reproduces 5,045,020 to the ruble; it is
-the only regression test that speaks the operator's language. Keep the
+Lot 41599967 is DEAD (404, confirmed 2026-08-08) - his quote is a sold car,
+so it lives on only as a fixture test that must reproduce 5,045,020 to the
+ruble; the live accept uses a fresh lot. His EUR is the CBR rate of the quote
+date (88.5259 on 15.07.2026) and his single duty line already contains the
+clearance fee - decomposition closes to 43 RUB at 1984 cc. Two rules settled after dispatch (2026-08-08): computed tariff lines are
+rounded UP to the nearest 100 RUB (operator: «мы округляем вверх до нулей»;
+2 326 157 -> 2 326 200 is his own figure, and with it the quote reproduces
+5 045 020 exactly), and the commission ladder brackets on the subtotal
+BEFORE commission - bracketing on the final total is self-referential near
+a boundary and worth 25 000 RUB in that band.
+
+Keep the
 engine's honesty rules (dash / floor / «по запросу») intact for lots his
 model cannot price.
