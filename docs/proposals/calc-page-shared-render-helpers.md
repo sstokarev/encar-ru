@@ -18,3 +18,10 @@ Two blocks are now duplicated between `src/ui/breakdown.ts` (widget) and
 
 Low urgency: wording drift is the only failure mode. Best done as a small
 follow-up task that owns `src/ui/` and both consumers.
+
+> **Verdict:** held — deduping the page renderer against the widget renderer is
+> only worth it if the widget survives. The operator is deciding the overlay's
+> fate (keep / redirect to the page / retire) now that the page is the pitch;
+> merging the two renderers first would either be thrown away or make the
+> retirement harder. Revisit the hour that decision lands — wording drift
+> between two live renderers is the cost of waiting, and it is small.
