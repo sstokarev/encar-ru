@@ -85,9 +85,14 @@ Then `docs/harness/project.md` and the head of the queue.
 One wait loop is your only listening mechanism, re-armed by acknowledging:
 
 ```
-orca orchestration check --wait --types worker_done,question,escalation --timeout-ms 600000 --json
-orca orchestration check --ack <delivery_id> ...     # ack, or the batch replays forever
+python3 harness/ears.py [--ack <delivery_id>]        # one waiter, refusal printed
 ```
+
+Use the wrapper, not the raw command: Orca allows exactly ONE actionable
+waiter per run, and arming a second returns `ok: false, waiter_exists` while
+exiting 0 — measured 2026-08-08, a second wait looked armed and was deaf.
+`ears.py` exits nonzero and prints `EARS: REFUSED ...` instead. Acking is
+still mandatory — an unacknowledged delivery replays forever.
 
 An unacknowledged delivery replays and everything new queues behind it.
 A timeout is a checkpoint, not a failure — never kill a worker for silence.
@@ -100,10 +105,14 @@ A timeout is a checkpoint, not a failure — never kill a worker for silence.
   to a 2,015-char strict prefix. Fetch the full body by message id.
 - **Long content travels as a file** in the worker's worktree plus a one-line
   pointer. A fragment is not a smaller message; it is a different one.
-- Three worker states, three commands: blocked on `ask` →
-  `orchestration reply --id <msg_id>`; working → `orchestration send --to
-  dispatch:<id>`; finished its turn → `orca terminal send --terminal <handle>
-  --text "..." --enter`.
+- **Send with `python3 harness/say.py --body-file <path>`**, never a shell
+  `--body "..."`: backticks in a body are command substitution, and on
+  2026-08-08 a note telling a worker which line to change arrived as "which
+  today reads ." — delivered, valid, and wrong. `say.py` passes argv, then
+  reads the stored copy back from the inbox and refuses on any mismatch.
+  Three worker states, three commands: blocked on `ask` → `say.py --reply
+  <msg_id>`; working → `say.py --to dispatch:<id>`; finished its turn →
+  `orca terminal send --terminal <handle> --text "..." --enter`.
 - A worker's `ask` reaches YOU and is for resources only. Product questions go
   to the operator in the worker's own pane with the picker — relay latency
   through you measured 4m08s per question in the previous project.
