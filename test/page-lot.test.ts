@@ -12,8 +12,9 @@ import {
   lotPrecision,
   type FxRates,
 } from "../src/calc/customs";
+import type { SpecsCatalog } from "../src/calc/specs";
 import { DEFAULT_CONFIG } from "../src/config.default";
-import { mapFuel, toLotDetails } from "../src/page/lot";
+import { loadSpecsCatalog, mapFuel, toLotDetails } from "../src/page/lot";
 import type { CarData } from "../src/encar/types";
 
 const NOW = new Date(2026, 7, 8); // 2026-08-08
@@ -84,7 +85,7 @@ describe("toLotDetails", () => {
     expect(duty !== undefined && !isUnknownLine(duty)).toBe(true);
   });
 
-  it("keeps the hybrid dash semantics end to end", () => {
+  it("keeps the hybrid dash semantics end to end without a catalog", () => {
     const details = toLotDetails(car({ fuelName: "하이브리드" }), NOW);
     expect(details.fuel).toBe("hybrid");
     const result = computeAllIn(
@@ -94,6 +95,137 @@ describe("toLotDetails", () => {
     );
     const recycling = result.items.find((item) => item.id === "recycling");
     expect(recycling !== undefined && isUnknownLine(recycling)).toBe(true);
+  });
+});
+
+/** Sonata DN8 HEV shape as the collector emits it (drom, 2026-08-08). */
+const CATALOG: SpecsCatalog = {
+  version: 1,
+  generatedAt: "2026-08-08",
+  entries: [
+    {
+      make: "hyundai",
+      aliases: ["sonata"],
+      from: "201903",
+      to: "202312",
+      fuel: "hybrid",
+      hybridKind: "parallel",
+      engineCc: 1999,
+      iceHp: 152,
+      electricHp30min: 20,
+    },
+    {
+      make: "hyundai",
+      aliases: ["ioniq 5"],
+      from: "202102",
+      fuel: "electric",
+      electricHp30min: 76,
+    },
+  ],
+};
+
+describe("toLotDetails with a specs catalog", () => {
+  const HYBRID_CAR = car({
+    title: "Hyundai Sonata Smart",
+    fuelName: "가솔린+전기",
+    displacementCc: 1999,
+    yearMonth: "202101",
+  });
+
+  it("enriches a matched hybrid with both powers and the kind", () => {
+    const details = toLotDetails(HYBRID_CAR, NOW, CATALOG);
+    expect(details.powerHp).toBe(152);
+    expect(details.electricHp30min).toBe(20);
+    expect(details.hybridKind).toBe("parallel");
+    // Catalog data is a snapshot reading, not an estimate.
+    expect(details.estimated).toBe(false);
+    // End to end: the fee line now computes from 152 + 20 = 172 л.с.
+    const result = computeAllIn(
+      { priceKrw: 20_000_000, ...details },
+      RATES,
+      DEFAULT_CONFIG,
+    );
+    const recycling = result.items.find((item) => item.id === "recycling");
+    expect(recycling !== undefined && !isUnknownLine(recycling)).toBe(true);
+  });
+
+  it("enriches a matched EV with the 30-minute power", () => {
+    const details = toLotDetails(
+      car({
+        title: "Hyundai Ioniq 5 Prestige",
+        fuelName: "전기",
+        displacementCc: null,
+        yearMonth: "202205",
+      }),
+      NOW,
+      CATALOG,
+    );
+    expect(details.electricHp30min).toBe(76);
+    expect(details.powerHp).toBeUndefined();
+    expect(details.hybridKind).toBeUndefined();
+  });
+
+  it("leaves an unmatched lot exactly as before", () => {
+    const details = toLotDetails(
+      car({ title: "Kia Ray", fuelName: "가솔린+전기", displacementCc: 998 }),
+      NOW,
+      CATALOG,
+    );
+    expect(details.electricHp30min).toBeUndefined();
+    expect(details.powerHp).toBeUndefined();
+    expect(details.hybridKind).toBeUndefined();
+  });
+
+  it("never consults the catalog for a non-electrified lot", () => {
+    // A diesel Sonata must not inherit the hybrid's powers.
+    const details = toLotDetails(
+      car({ title: "Hyundai Sonata Smart", displacementCc: 1999 }),
+      NOW,
+      CATALOG,
+    );
+    expect(details.electricHp30min).toBeUndefined();
+    expect(details.powerHp).toBeUndefined();
+  });
+});
+
+describe("loadSpecsCatalog", () => {
+  const stubFetch = (impl: () => Promise<Response>): (() => void) => {
+    const original = globalThis.fetch;
+    globalThis.fetch = impl as typeof fetch;
+    return () => {
+      globalThis.fetch = original;
+    };
+  };
+
+  it("returns a valid catalog", async () => {
+    const restore = stubFetch(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(CATALOG), { status: 200 }),
+      ),
+    );
+    try {
+      expect(await loadSpecsCatalog("https://example.test/c.json")).toEqual(
+        CATALOG,
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it.each([
+    ["HTTP error", (): Promise<Response> => Promise.resolve(new Response("", { status: 404 }))],
+    ["network failure", (): Promise<Response> => Promise.reject(new Error("offline"))],
+    ["corrupt shape", (): Promise<Response> => Promise.resolve(new Response('{"version":2}', { status: 200 }))],
+    ["non-JSON body", (): Promise<Response> => Promise.resolve(new Response("<html>", { status: 200 }))],
+  ])("degrades to undefined on %s", async (_name, impl) => {
+    const restore = stubFetch(impl);
+    try {
+      expect(
+        await loadSpecsCatalog("https://example.test/c.json"),
+      ).toBeUndefined();
+    } finally {
+      restore();
+    }
   });
 });
 
