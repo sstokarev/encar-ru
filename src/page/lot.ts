@@ -20,9 +20,13 @@ import type { CarData } from "../encar/types";
 /** First registration "YYYYMM" as the API sends it. */
 const YEAR_MONTH_RE = /^(\d{4})(\d{2})$/;
 
-/** English fuel names the API may send instead of Korean tokens. */
+/**
+ * English fuel names the API may send instead of Korean tokens. Order
+ * matters, same as the Korean FUEL_TOKENS: a compound "Gasoline+Electric"
+ * must resolve to hybrid before the bare "electric" rule can claim it.
+ */
 const ENGLISH_FUEL: ReadonlyArray<readonly [RegExp, FuelType]> = [
-  [/hybrid/i, "hybrid"],
+  [/hybrid|gasoline\s*\+\s*electric|electric\s*\+\s*gasoline|diesel\s*\+\s*electric/i, "hybrid"],
   [/electric|\bev\b/i, "electric"],
   [/lpg/i, "lpg"],
   [/diesel/i, "diesel"],

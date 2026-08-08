@@ -110,6 +110,9 @@ describe("mapFuel", () => {
     ["Petrol", "gasoline"],
     ["Hybrid", "hybrid"],
     ["Electric", "electric"],
+    ["Gasoline+Electric", "hybrid"],
+    ["electric + gasoline", "hybrid"],
+    ["Diesel+Electric", "hybrid"],
   ])("maps %s to %s", (name, fuel) => {
     expect(mapFuel(name)).toBe(fuel);
   });

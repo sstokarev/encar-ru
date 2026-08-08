@@ -18,7 +18,7 @@ import { resolveRates, type ResolvedRates } from "../rates/cbr";
 import type { EncarFetch, ParseListingUrl } from "../encar/types";
 import { fetchCar, parseListingUrl, SOURCE } from "./encar-adapter";
 import { mapFuel, toLotDetails } from "./lot";
-import { renderError, renderResult } from "./render";
+import { renderError, renderLoading, renderResult } from "./render";
 
 export interface PageDeps {
   parseListingUrl: ParseListingUrl;
@@ -72,6 +72,7 @@ export function initCalcPage(
     const seq = ++requestSeq;
     submit.disabled = true;
     result.setAttribute("data-loading", "");
+    renderLoading(result);
 
     void (async () => {
       try {

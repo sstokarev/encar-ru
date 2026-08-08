@@ -38,10 +38,6 @@ const RATES: ResolvedRates = {
   source: "cbr",
 };
 
-function loadedConfig(source: LoadedConfig["source"] = "remote"): LoadedConfig {
-  return { config: DEFAULT_CONFIG, source };
-}
-
 function pageDom(): Document {
   document.body.innerHTML = `
     <form data-calc-form>
@@ -59,12 +55,18 @@ interface SetupOptions {
   source?: LoadedConfig["source"];
   rates?: ResolvedRates;
   demo?: boolean;
+  config?: LoadedConfig["config"];
+  /** Overrides fetchCar entirely (deferred-promise tests). */
+  fetchImpl?: (vehicleId: string) => Promise<CarData>;
 }
 
 function setup(options: SetupOptions = {}): {
   doc: Document;
   submit: (url: string) => Promise<void>;
+  submitNoWait: (url: string) => void;
+  drain: () => Promise<void>;
   result: HTMLElement;
+  button: HTMLButtonElement;
   fetchCalls: string[];
 } {
   const doc = pageDom();
@@ -76,11 +78,16 @@ function setup(options: SetupOptions = {}): {
     },
     fetchCar: (vehicleId) => {
       fetchCalls.push(vehicleId);
+      if (options.fetchImpl !== undefined) return options.fetchImpl(vehicleId);
       return options.failFetch === true
         ? Promise.reject(new Error("boom"))
         : Promise.resolve(options.car ?? FIXTURE_CAR);
     },
-    loadConfig: () => Promise.resolve(loadedConfig(options.source)),
+    loadConfig: () =>
+      Promise.resolve({
+        config: options.config ?? DEFAULT_CONFIG,
+        source: options.source ?? "remote",
+      }),
     resolveRates: () => Promise.resolve(options.rates ?? RATES),
     demo: options.demo ?? false,
   };
@@ -88,19 +95,29 @@ function setup(options: SetupOptions = {}): {
   const input = doc.querySelector<HTMLInputElement>("[data-calc-url]");
   const form = doc.querySelector<HTMLFormElement>("[data-calc-form]");
   const result = doc.querySelector<HTMLElement>("[data-calc-result]");
-  if (input === null || form === null || result === null) {
+  const button = doc.querySelector<HTMLButtonElement>("[data-calc-submit]");
+  if (input === null || form === null || result === null || button === null) {
     throw new Error("page dom incomplete");
   }
+  const submitNoWait = (url: string): void => {
+    input.value = url;
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+  };
+  const drain = async (): Promise<void> => {
+    // Two microtask-chained awaits inside the handler; drain generously.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
   return {
     doc,
     result,
+    button,
     fetchCalls,
+    submitNoWait,
+    drain,
     submit: async (url: string) => {
-      input.value = url;
-      form.dispatchEvent(new Event("submit", { cancelable: true }));
-      // Two microtask-chained awaits inside the handler; drain generously.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      submitNoWait(url);
+      await drain();
     },
   };
 }
@@ -197,5 +214,94 @@ describe("calc page", () => {
     await submit(LOT_URL);
     await submit(LOT_URL);
     expect(result.querySelectorAll("[data-result]").length).toBe(1);
+  });
+
+  it("shows the loading card and disables the button while in flight", async () => {
+    let release: (car: CarData) => void = () => {};
+    const { result, button, submitNoWait, drain } = setup({
+      fetchImpl: () => new Promise((resolve) => (release = resolve)),
+    });
+    submitNoWait(LOT_URL);
+    expect(button.disabled).toBe(true);
+    expect(result.hasAttribute("data-loading")).toBe(true);
+    expect(result.querySelector("[data-loading-card]")).not.toBeNull();
+    release(FIXTURE_CAR);
+    await drain();
+    expect(button.disabled).toBe(false);
+    expect(result.hasAttribute("data-loading")).toBe(false);
+    expect(result.querySelector("[data-loading-card]")).toBeNull();
+    expect(result.querySelector("[data-result]")).not.toBeNull();
+  });
+
+  it("discards a stale response that resolves after a newer submit", async () => {
+    const pending: Array<(car: CarData) => void> = [];
+    const { result, button, submitNoWait, drain } = setup({
+      fetchImpl: () => new Promise((resolve) => pending.push(resolve)),
+    });
+    submitNoWait(LOT_URL);
+    // A second submit while the first hangs (programmatic path: the disabled
+    // button does not stop dispatched submit events).
+    submitNoWait(LOT_URL);
+    const [first, second] = pending;
+    if (first === undefined || second === undefined) throw new Error("no fetches");
+    second({ ...FIXTURE_CAR, title: "Newer Car" });
+    await drain();
+    expect(result.querySelector("[data-title]")?.textContent).toBe("Newer Car");
+    // The stale first response must not overwrite the newer render.
+    first({ ...FIXTURE_CAR, title: "Stale Car" });
+    await drain();
+    expect(result.querySelector("[data-title]")?.textContent).toBe("Newer Car");
+    expect(button.disabled).toBe(false);
+  });
+
+  it("renders the preliminary-rate and rejected-rate provenance notes", async () => {
+    const { result, submit } = setup({
+      rates: { ...RATES, source: "config", rejected: true },
+    });
+    await submit(LOT_URL);
+    expect(result.querySelector("[data-preliminary-rate]")?.textContent).toContain(
+      "2026-08-08",
+    );
+    expect(result.querySelector("[data-rejected-rate]")).not.toBeNull();
+  });
+
+  it("skips the photo block, zero specs and dashes nothing extra for a sparse car", async () => {
+    const { result, submit } = setup({
+      car: { ...FIXTURE_CAR, photoUrls: [], displacementCc: 0, seatCount: 0 },
+    });
+    await submit(LOT_URL);
+    expect(result.querySelector("[data-photos]")).toBeNull();
+    const specs = result.querySelector("[data-specs]")?.textContent ?? "";
+    expect(specs).not.toContain("0 см³");
+    expect(specs).not.toContain("Мест");
+  });
+
+  it("removes a photo that fails to load", async () => {
+    const { result, submit } = setup();
+    await submit(LOT_URL);
+    const thumb = result.querySelector("[data-photo-thumb]");
+    expect(thumb).not.toBeNull();
+    thumb?.dispatchEvent(new Event("error"));
+    expect(result.querySelector("[data-photo-thumb]")).toBeNull();
+    expect(
+      result
+        .querySelector("[data-photo-main]")
+        ?.getAttribute("referrerpolicy"),
+    ).toBe("no-referrer");
+  });
+
+  it("labels the button for a whatsapp messenger config", async () => {
+    const { result, submit } = setup({
+      config: {
+        ...DEFAULT_CONFIG,
+        messenger: { type: "whatsapp", address: "+79990001122" },
+      },
+    });
+    await submit(LOT_URL);
+    const anchor = result.querySelector<HTMLAnchorElement>(
+      "[data-messenger-button]",
+    );
+    expect(anchor?.textContent).toBe("Написать в WhatsApp");
+    expect(anchor?.href.startsWith("https://wa.me/")).toBe(true);
   });
 });

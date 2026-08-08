@@ -50,13 +50,18 @@ const ON_REQUEST_TEXT = "расчёт по запросу";
 
 /** Korean spec value -> Russian via the widget's exact dictionary, else raw. */
 function ru(value: string): string {
-  return EXACT_MAP[value.trim()] ?? value;
+  const key = value.trim();
+  // Own-key lookup only: an API value like "constructor" must not resolve
+  // into Object.prototype members.
+  return Object.hasOwn(EXACT_MAP, key) ? (EXACT_MAP[key] as string) : value;
 }
 
-/** "202109" -> "09.2021"; anything else is shown as sent. */
+/** "202109" -> "09.2021"; anything else (incl. month 13) is shown as sent. */
 function formatYearMonth(yearMonth: string): string {
   const match = /^(\d{4})(\d{2})$/.exec(yearMonth);
-  return match ? `${match[2]}.${match[1]}` : yearMonth;
+  if (match === null) return yearMonth;
+  const month = Number(match[2]);
+  return month >= 1 && month <= 12 ? `${match[2]}.${match[1]}` : yearMonth;
 }
 
 /** Grouped integer with narrow spaces: 48210 -> "48 210". */
@@ -80,6 +85,10 @@ function el(
 function photo(doc: Document, url: string, main: boolean): HTMLImageElement {
   const img = doc.createElement("img");
   img.setAttribute(main ? "data-photo-main" : "data-photo-thumb", "");
+  // Same referrer discipline as the API fetch and the messenger anchor: the
+  // photo host must not learn the Pages origin (and must not get a reason to
+  // hotlink-403 the whole gallery into onerror removal).
+  img.setAttribute("referrerpolicy", "no-referrer");
   img.src = url;
   img.alt = "";
   img.loading = "lazy";
@@ -104,16 +113,25 @@ function renderSpecs(doc: Document, car: CarData, fuel: FuelType | undefined): H
     dd.textContent = value;
     list.append(dt, dd);
   };
-  add("Год выпуска", formatYearMonth(car.yearMonth));
+  // yearMonth is the FIRST REGISTRATION month (src/encar/types.ts), which for
+  // an export car can lag the manufacture year — the label must not overclaim.
+  add("Первая регистрация", formatYearMonth(car.yearMonth));
   add("Пробег", `${groupInt(car.mileageKm)} км`);
+  // The client admits 0 for numeric fields; a zero displacement (EV) or zero
+  // seat count is "not published", not a spec to print.
   add(
     "Двигатель",
-    car.displacementCc !== null ? `${groupInt(car.displacementCc)} см³` : null,
+    car.displacementCc !== null && car.displacementCc > 0
+      ? `${groupInt(car.displacementCc)} см³`
+      : null,
   );
   add("Топливо", fuel !== undefined ? FUEL_RU[fuel] : car.fuelName);
   add("КПП", ru(car.transmissionName));
   add("Цвет", ru(car.colorName));
-  add("Мест", car.seatCount !== null ? String(car.seatCount) : null);
+  add(
+    "Мест",
+    car.seatCount !== null && car.seatCount > 0 ? String(car.seatCount) : null,
+  );
   add("Кузов", ru(car.bodyName));
   add("VIN", car.vin);
   return list;
@@ -229,6 +247,18 @@ function renderMessengerButton(doc: Document, model: PageModel): HTMLElement {
 export function renderError(container: HTMLElement, message: string): void {
   const doc = container.ownerDocument;
   container.replaceChildren(el(doc, "div", "data-error", message));
+}
+
+/**
+ * Replaces the container content with a loading card: on the FIRST submit the
+ * container is empty, so a dimming style alone gives the user (and the
+ * aria-live region) nothing at all for up to the fetch timeout.
+ */
+export function renderLoading(container: HTMLElement): void {
+  const doc = container.ownerDocument;
+  container.replaceChildren(
+    el(doc, "div", "data-loading-card", "Загружаю данные автомобиля…"),
+  );
 }
 
 /**
