@@ -12,6 +12,10 @@ git commit --allow-empty -m "claim: task/<name>"
 
 The claim is the only proof the dispatch reached you. No claim, no task.
 
+Two self-heals before reading further, no ask needed: if your brief is absent,
+`git fetch origin && git merge origin/main` (your worktree may predate it);
+if your branch is not `task/<name>`, `git branch -m task/<name>`.
+
 ## The cycle, sized by the brief's `size`
 
 | size   | cycle |

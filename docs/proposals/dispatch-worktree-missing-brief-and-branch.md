@@ -14,3 +14,9 @@ preflight) should verify, before engaging the worker, that the worktree's HEAD
 contains the brief file and that the branch matches the brief's `branch` field
 — or pipeline.md should gain one line telling the worker to fetch/merge main
 and rename the branch when the brief is absent.
+
+> **Verdict:** taken — closed by the architect in-harness the hour it landed:
+> preflight now refuses a brief absent from `origin/main` (the exact failure),
+> `pipeline.md` gained the two self-heal lines (merge origin/main, rename
+> branch), and the architect skill records where Orca cuts worktrees from.
+> Gates are the architect's own surface; no separate task minted.

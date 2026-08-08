@@ -139,6 +139,16 @@ def check(name):
             if rc == 0 and behind.isdigit() and int(behind) > 0:
                 errors.append("worktree is %s commits behind main - merge main first" % behind)
 
+    # Orca cuts the worker's worktree from origin/main: a brief that is not
+    # pushed does not exist for the worker (cost one blocked ask, 2026-08-08).
+    rc, _ = git(["rev-parse", "--verify", "--quiet", "origin/main"])
+    if rc == 0:
+        rc, _ = git(["cat-file", "-e", "origin/main:docs/tasks/%s.md" % name])
+        if rc != 0:
+            errors.append(
+                "brief is not on origin/main - push main before dispatch "
+                "(Orca cuts the worktree from origin/main)")
+
     owns = set(fields.get("owns") or [])
     for other, of in live_briefs(exclude=name):
         overlap = owns & set(of.get("owns") or [])

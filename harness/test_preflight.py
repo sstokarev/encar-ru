@@ -159,6 +159,20 @@ class Preflight(unittest.TestCase):
         r = preflight(self.repo, "y")
         self.assertEqual(r.returncode, 0, r.stdout)
 
+    def test_brief_missing_from_origin_main_refused(self):
+        remote = Path(self.tmp) / "origin.git"
+        run(self.repo, 'git init -q --bare "%s"' % remote)
+        run(self.repo, 'git remote add origin "%s"' % remote)
+        run(self.repo, "git push -q origin main")  # brief not committed yet
+        write_brief(self.repo, "x", VALID.format(wt=Path(self.tmp) / "pending"))
+        r = preflight(self.repo, "x")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not on origin/main", r.stdout)
+        run(self.repo, "git add . && git -c user.email=t@t -c user.name=t "
+            "commit -q -m brief && git push -q origin main")
+        r = preflight(self.repo, "x")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
     def test_pipeline_doc_budget(self):
         doc = HARNESS.parent / "docs" / "harness" / "pipeline.md"
         if doc.exists():

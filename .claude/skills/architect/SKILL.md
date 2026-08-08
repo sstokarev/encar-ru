@@ -69,7 +69,11 @@ Then `docs/harness/project.md` and the head of the queue.
    Orca creates the worktree and submits the prompt itself — there is no
    manual `git worktree add`, no terminal typing, no enter-pressing. The spec
    is short: point at the brief file and `docs/harness/pipeline.md`; do not
-   restate what a gate already enforces.
+   restate what a gate already enforces. Measured 2026-08-08: the worktree is
+   cut from **origin/main** (push the brief first — preflight now refuses an
+   unpushed one), lands at `~/orca/workspaces/<repo>/<name>`, and its branch
+   is named `<name>`, not `task/<name>` — the worker renames it per
+   `pipeline.md`.
 4. **Delivered means the claim commit exists** (`claim: task/<name>`, empty).
    `input_accepted` is a statement about bytes, not about an agent reading
    them. No claim within a few minutes → read the pane once, re-send the
