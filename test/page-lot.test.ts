@@ -7,11 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   computeAgeYears,
-  computeAllIn,
   isUnknownLine,
   lotPrecision,
   type FxRates,
 } from "../src/calc/customs";
+import { computeQuote } from "../src/calc/pricing";
 import type { SpecsCatalog } from "../src/calc/specs";
 import { DEFAULT_CONFIG } from "../src/config.default";
 import { loadSpecsCatalog, mapFuel, toLotDetails } from "../src/page/lot";
@@ -73,7 +73,7 @@ describe("toLotDetails", () => {
 
   it("dashes the recycling fee but computes the duty (no power in the data)", () => {
     const details = toLotDetails(car(), NOW);
-    const result = computeAllIn(
+    const result = computeQuote(
       { priceKrw: 20_000_000, ...details },
       RATES,
       DEFAULT_CONFIG,
@@ -88,7 +88,7 @@ describe("toLotDetails", () => {
   it("keeps the hybrid dash semantics end to end without a catalog", () => {
     const details = toLotDetails(car({ fuelName: "하이브리드" }), NOW);
     expect(details.fuel).toBe("hybrid");
-    const result = computeAllIn(
+    const result = computeQuote(
       { priceKrw: 20_000_000, ...details },
       RATES,
       DEFAULT_CONFIG,
@@ -140,7 +140,7 @@ describe("toLotDetails with a specs catalog", () => {
     // Catalog data is a snapshot reading, not an estimate.
     expect(details.estimated).toBe(false);
     // End to end: the fee line now computes from 152 + 20 = 172 л.с.
-    const result = computeAllIn(
+    const result = computeQuote(
       { priceKrw: 20_000_000, ...details },
       RATES,
       DEFAULT_CONFIG,

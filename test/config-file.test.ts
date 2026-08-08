@@ -336,14 +336,93 @@ describe("the shipped order channel", () => {
   });
 });
 
-describe("DEFAULT_CONFIG: cost items the importer has not priced yet", () => {
-  it("dashes shipping, SBKTS/EPTS, broker and commission", () => {
-    const byId = new Map(DEFAULT_CONFIG.costItems.map((i) => [i.id, i]));
-    for (const id of ["shipping", "sbkts", "broker", "commission"]) {
-      expect(byId.get(id)?.kind).toBe("unknown");
-      expect(byId.get(id)).not.toHaveProperty("value");
+describe("DEFAULT_CONFIG: the operator's real pricing model (2026-08-08)", () => {
+  const byId = new Map(DEFAULT_CONFIG.costItems.map((i) => [i.id, i]));
+
+  it("prices every line — nothing is 'unknown' any more", () => {
+    // The whole point of the handover: four of five lines used to dash and the
+    // total read «от N ₽». A dash reappearing here means a line quietly stopped
+    // being priced, and the client sees a floor where he was promised a price.
+    for (const item of DEFAULT_CONFIG.costItems) {
+      expect(item.kind).not.toBe("unknown");
     }
+  });
+
+  it("prices the Korean costs in WON, not in roubles", () => {
+    // A RUB line here would sit OUTSIDE the customs value and quote a
+    // different duty on the same car — the shape the handover called wrong.
+    expect(byId.get("korea")).toMatchObject({ kind: "krw", value: 2_500_000 });
+  });
+
+  it("keeps the customs formula and the fixed broker line", () => {
     expect(byId.get("customs")?.kind).toBe("formula");
+    expect(byId.get("broker")).toMatchObject({ kind: "fixed", value: 116_000 });
+  });
+
+  it("carries the commission ladder with exclusive bounds", () => {
+    const commission = byId.get("commission");
+    expect(commission?.kind).toBe("ladder");
+    expect(commission).toMatchObject({
+      brackets: [
+        { underRub: 1_500_000, fee: 30_000 },
+        { underRub: 5_500_000, fee: 50_000 },
+        { underRub: 9_500_000, fee: 75_000 },
+        { fee: 100_000 },
+      ],
+    });
+  });
+
+  it("no longer carries a separate СБКТС/ЭПТС line", () => {
+    // His quote is «под ключ во Владивостоке» and does not charge it apart.
+    expect(byId.get("sbkts")).toBeUndefined();
+  });
+});
+
+describe("isValidConfig: the new cost-item kinds", () => {
+  it("rejects a negative WON amount", () => {
+    // Zero is a waived month; negative would discount the customs value and
+    // with it the duty.
+    const cfg = draft();
+    (cfg["costItems"] as Record<string, unknown>[])[0]!["value"] = -1;
+    expect(isValidConfig(cfg)).toBe(false);
+  });
+
+  it("rejects a ladder whose bounds do not ascend", () => {
+    const cfg = draft();
+    const items = cfg["costItems"] as Record<string, unknown>[];
+    const ladder = items[items.length - 1]!;
+    ladder["brackets"] = [
+      { underRub: 5_000_000, fee: 1 },
+      { underRub: 1_000, fee: 2 },
+      { fee: 3 },
+    ];
+    expect(isValidConfig(cfg)).toBe(false);
+  });
+
+  it("rejects a ladder whose last bracket is not open-ended", () => {
+    // A bounded last step makes the lookup fall off the end for a big lot.
+    const cfg = draft();
+    const items = cfg["costItems"] as Record<string, unknown>[];
+    const ladder = items[items.length - 1]!;
+    ladder["brackets"] = [{ underRub: 1_500_000, fee: 30_000 }];
+    expect(isValidConfig(cfg)).toBe(false);
+  });
+
+  it("rejects two ladders — the commission would be charged twice", () => {
+    const cfg = draft();
+    const items = cfg["costItems"] as Record<string, unknown>[];
+    items.push({ ...items[items.length - 1]!, id: "commission2" });
+    expect(isValidConfig(cfg)).toBe(false);
+  });
+
+  it("rejects an unknown kind, which is what protects OLD clients", () => {
+    // The reverse of this check is the reason the new kinds live in costItems:
+    // an installed extension runs an old validator, and rejecting a config it
+    // does not understand is what makes it fall back to its embedded copy
+    // instead of printing a confident total that is missing two lines.
+    const cfg = draft();
+    (cfg["costItems"] as Record<string, unknown>[])[0]!["kind"] = "quantum";
+    expect(isValidConfig(cfg)).toBe(false);
   });
 });
 

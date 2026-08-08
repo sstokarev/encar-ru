@@ -2,7 +2,9 @@
  * DOM rendering of the calc page result (U4).
  *
  * Same money semantics as the widget's breakdown (src/ui/breakdown.ts): rows
- * come straight from computeAllIn, an undeterminable line keeps its label and
+ * come straight from computeQuote (src/calc/pricing.ts — the tariff engine's
+ * lines, with the price row split into car + Korean costs, the tariff-rounding
+ * row and the commission row added), an undeterminable line keeps its label and
  * shows an em dash with its reason, the total renders with its precision
  * prefix ("≈"/"от") or as "расчёт по запросу", and every provenance caveat
  * (embedded config, preliminary/rejected rate, rate date) is spelled out.

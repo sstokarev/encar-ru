@@ -351,10 +351,12 @@ describe("degradation on nonstandard blocks", () => {
     const hosts = badgeHosts();
     expect(hosts.length).toBe(1);
     // No year and no displacement: duty and the recycling fee cannot be
-    // computed and dash. What IS proven — the lot price (8,000,000 KRW *
-    // 0.055 = 440,000) and its clearance fee (2,462) — is quoted as a floor.
-    // Refusing to show a price we do know helps nobody.
-    expect(badgeText(hosts[0]!)).toBe("от 442 462 ₽");
+    // computed and dash. What IS proven is quoted as a floor — refusing to
+    // show a price we do know helps nobody:
+    //   (8,000,000 car + 2,500,000 Korean costs) * 0.055 = 577,500,
+    //   + clearance 4,924 + broker 116,000 -> subtotal 698,424
+    //   -> the ladder's first step, 30,000 -> 728,424.
+    expect(badgeText(hosts[0]!)).toBe("от 728 424 ₽");
   });
 });
 
@@ -382,15 +384,17 @@ describe("precision wiring (AE1)", () => {
     // The badge shows the all-in ("под ключ") total, not the lot price. The
     // card publishes age, fuel and displacement but never engine power, so the
     // recycling fee dashes and the total is a lower bound.
-    expect(badgeText(hosts[0]!)).toBe("от 1 314 880 ₽");
+    expect(badgeText(hosts[0]!)).toBe("от 1 620 842 ₽");
 
     const panel = breakdownPanel();
     expect(panel.getAttribute("data-precision")).toBe("partial");
-    // Embedded config, 118 months old (y5plus), 2199cc diesel:
-    //   lot 362,450 + duty 4.8*2199*90 = 949,968 + clearance 2,462
-    //   -> 1,314,880. Recycling dashes (no power); shipping, sbkts, broker and
-    //   the commission are "unknown" items and add nothing.
-    expect(totalValue(panel)).toBe("от 1 314 880 ₽");
+    // Embedded config (the operator's model), 118 months old (y5plus),
+    // 2199cc diesel: car 6,590,000 * 0.055 = 362,450 + Korean costs 137,500
+    // (folded in before conversion, so the customs value is 499,950 and the
+    // clearance bracket is 4,924) + duty 4.8*2199*90 = 949,968 + broker
+    // 116,000 -> subtotal 1,570,842 -> commission 50,000 -> 1,620,842.
+    // Recycling dashes (no power), so the total is a floor with no rounding.
+    expect(totalValue(panel)).toBe("от 1 620 842 ₽");
     // A floor is not an approximation: nothing here may come out LOWER, so the
     // "≈" reason line stays off.
     expect(panel.querySelector("[data-approx-reason]")).toBeNull();
@@ -429,11 +433,11 @@ describe("precision wiring (AE1)", () => {
     // cannot be described as "might also come out lower" just because one of
     // its inputs was estimated (pinned in test/calc.test.ts — "partial" wins
     // over "approx").
-    expect(badgeText(hosts[0]!)).toBe("от 1 314 880 ₽");
+    expect(badgeText(hosts[0]!)).toBe("от 1 620 842 ₽");
 
     const panel = breakdownPanel();
     expect(panel.getAttribute("data-precision")).toBe("partial");
-    expect(totalValue(panel)).toBe("от 1 314 880 ₽");
+    expect(totalValue(panel)).toBe("от 1 620 842 ₽");
     expect(panel.querySelector("[data-approx-reason]")).toBeNull();
   });
 

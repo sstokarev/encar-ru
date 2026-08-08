@@ -74,6 +74,15 @@ Then `docs/harness/project.md` and the head of the queue.
    unpushed one), lands at `~/orca/workspaces/<repo>/<name>`, and its branch
    is named `<name>`, not `task/<name>` — the worker renames it per
    `pipeline.md`.
+3b. **Start workers through `python3 harness/spawn.py`**, which refuses a
+   worktree that already holds a live agent terminal. Measured 2026-08-08: a
+   `terminal send` nudge DID reach an idle worker, the pane tail read back
+   showed only the prompt, the architect concluded it had failed and started a
+   second session in the same worktree — two agents then edited the same five
+   files and left six failing tests. A pane tail is a lagging snapshot and is
+   never evidence about liveness or delivery; the working tree and the commit
+   log are.
+
 4. **Delivered means the claim commit exists** (`claim: task/<name>`, empty).
    `input_accepted` is a statement about bytes, not about an agent reading
    them. No claim within a few minutes → read the pane once, re-send the
