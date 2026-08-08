@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parsePriceText, scanPrices } from "../src/scan/scanner";
 import { observeDom } from "../src/scan/observer";
 import { extractCardParams, toLotDetails } from "../src/scan/params";
-import { computeAllIn } from "../src/calc/customs";
+import { computeQuote } from "../src/calc/pricing";
 import { badgeText as renderBadgeText } from "../src/ui/badge";
 import { DEFAULT_CONFIG } from "../src/config.default";
 import { init } from "../src/main";
@@ -41,7 +41,7 @@ const CONFIG_RATES = {
  * power, so the recycling line dashes and the headline is a floor ("от N ₽").
  */
 const CARD_ALL_IN_TEXT = renderBadgeText(
-  computeAllIn(
+  computeQuote(
     {
       priceKrw: CARD_KRW,
       ...toLotDetails(
@@ -205,10 +205,16 @@ describe("regex fallback", () => {
     const texts = badgeHosts().map(badgeText);
     expect(badgeHosts().length).toBe(2);
     // Bare markup exposes no lot params, so duty and the recycling fee dash.
-    // The lot price and the clearance fee are still provable, and a proven
-    // floor beats a refusal: 12,500,000 KRW * 0.055 = 687,500 + 4,924 fee,
-    // 6,600,000 * 0.055 = 363,000 + 2,462 fee.
-    expect(texts).toEqual(["от 692 424 ₽", "от 365 462 ₽"]);
+    // Everything the importer charges is still provable, and a proven floor
+    // beats a refusal. The Korean costs (2,500,000 KRW) are converted together
+    // with the car, and the commission ladder brackets the rest:
+    //   (12,500,000 + 2,500,000) * 0.055 = 825,000 + 4,924 clearance
+    //     + 116,000 broker -> subtotal 945,924 -> 30,000 commission = 975,924;
+    //   (6,600,000 + 2,500,000) * 0.055 = 500,500 + 4,924 + 116,000
+    //     -> subtotal 621,424 -> 30,000 = 651,424.
+    // No tariff-rounding row: the tariff block is incomplete, and rounding a
+    // floor upwards is how it stops being a floor.
+    expect(texts).toEqual(["от 975 924 ₽", "от 651 424 ₽"]);
   });
 });
 

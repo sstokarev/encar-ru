@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "messenger": {
     "type": "telegram",
     "address": "globalcartrade"
@@ -13,9 +13,10 @@
   },
   "costItems": [
     {
-      "id": "shipping",
-      "label": "Доставка Корея — Владивосток",
-      "kind": "unknown"
+      "id": "korea",
+      "label": "Расходы по Корее (экспорт, фрахт)",
+      "kind": "krw",
+      "value": 2500000
     },
     {
       "id": "customs",
@@ -24,19 +25,21 @@
       "value": "customs_v1"
     },
     {
-      "id": "sbkts",
-      "label": "СБКТС и ЭПТС",
-      "kind": "unknown"
-    },
-    {
       "id": "broker",
-      "label": "Брокер и СВХ",
-      "kind": "unknown"
+      "label": "Брокерские услуги и тариф СВХ",
+      "kind": "fixed",
+      "value": 116000
     },
     {
       "id": "commission",
-      "label": "Комиссия импортёра",
-      "kind": "unknown"
+      "label": "Комиссия GlobalCarTrade",
+      "kind": "ladder",
+      "brackets": [
+        { "underRub": 1500000, "fee": 30000 },
+        { "underRub": 5500000, "fee": 50000 },
+        { "underRub": 9500000, "fee": 75000 },
+        { "fee": 100000 }
+      ]
     }
   ],
   "customs": {

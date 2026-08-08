@@ -21,6 +21,9 @@ export type {
   DutyValueTier,
   FixedCostItem,
   FormulaCostItem,
+  KrwCostItem,
+  LadderBracket,
+  LadderCostItem,
   MessengerConfig,
   MessengerType,
   PercentCostItem,
@@ -71,6 +74,23 @@ function isCostItem(value: unknown): value is CostItem {
       // A cost the importer has not priced yet: it renders as a dash and is
       // excluded from the total, so an amount here would be silently dropped.
       return item["value"] === undefined;
+    case "krw":
+      // A WON amount folded into the price before conversion. Zero is a
+      // legitimate "waived this month"; negative is not — it would silently
+      // discount the customs value and with it the duty.
+      return isFiniteNumber(item["value"]) && item["value"] >= 0;
+    case "ladder":
+      // Commission steps on the pre-commission subtotal. isBracketArray gives
+      // the same guarantees as every tariff bracket: ascending bounds, last
+      // entry open-ended, so the lookup always resolves.
+      return (
+        item["value"] === undefined &&
+        isBracketArray(
+          item["brackets"],
+          "underRub",
+          (entry) => isFiniteNumber(entry["fee"]) && entry["fee"] >= 0,
+        )
+      );
     default:
       return false;
   }
@@ -79,6 +99,11 @@ function isCostItem(value: unknown): value is CostItem {
 /** True for a recognised customs formula item (at most one per config). */
 function isCustomsFormulaItem(item: CostItem): boolean {
   return item.kind === "formula" && item.value === CUSTOMS_FORMULA;
+}
+
+/** True for a commission ladder item (at most one per config). */
+function isLadderItem(item: CostItem): boolean {
+  return item.kind === "ladder";
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -243,6 +268,9 @@ export function isValidConfig(value: unknown): value is WidgetConfig {
     costItems.every(isCostItem) &&
     // Two customs formula items would add duty, recycling and clearance twice.
     (costItems as CostItem[]).filter(isCustomsFormulaItem).length <= 1 &&
+    // Two ladders would charge the commission twice, and the second would
+    // bracket on a subtotal that already contains the first.
+    (costItems as CostItem[]).filter(isLadderItem).length <= 1 &&
     isCustomsConfig(cfg["customs"]) &&
     typeof cfg["commissionNote"] === "string"
   );

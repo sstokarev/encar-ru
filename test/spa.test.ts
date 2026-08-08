@@ -23,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { init } from "../src/main";
 import { badgeText as renderBadgeText } from "../src/ui/badge";
-import { computeAllIn } from "../src/calc/customs";
+import { computeQuote } from "../src/calc/pricing";
 import { DEFAULT_CONFIG } from "../src/config.default";
 import { ANNOTATED_ATTR } from "../src/scan/scanner";
 import { refreshStale } from "../src/scan/refresh";
@@ -62,7 +62,7 @@ function badgeText(host: HTMLElement): string {
 /** What the badge must read for a lot of `krw` with no params known. */
 function expectedText(krw: number): string {
   return renderBadgeText(
-    computeAllIn({ priceKrw: krw }, RATES, DEFAULT_CONFIG),
+    computeQuote({ priceKrw: krw }, RATES, DEFAULT_CONFIG),
   );
 }
 

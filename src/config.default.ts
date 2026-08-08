@@ -9,7 +9,13 @@
  */
 
 export type MessengerType = "telegram" | "whatsapp";
-export type CostItemKind = "fixed" | "percent" | "formula" | "unknown";
+export type CostItemKind =
+  | "fixed"
+  | "percent"
+  | "formula"
+  | "unknown"
+  | "krw"
+  | "ladder";
 
 export interface MessengerConfig {
   type: MessengerType;
@@ -65,15 +71,85 @@ export interface UnknownCostItem extends CostItemBase {
 }
 
 /**
+ * A cost priced in WON at the Korean end (export paperwork, freight). It is
+ * added to the lot price BEFORE the FX conversion, which is not a cosmetic
+ * difference: folded in first it lands inside the CUSTOMS VALUE, which is
+ * where the clearance-fee bracket and the <3y duty tiers read the number from
+ * — and that is the legally correct place, since the customs value includes
+ * delivery to the border. As a RUB line added afterwards it would sit outside
+ * every tariff bracket and quote a different (lower) duty on the same car.
+ *
+ * Interpreted by src/calc/pricing.ts, never by computeAllIn: the engine only
+ * ever sees the already-folded price.
+ */
+export interface KrwCostItem extends CostItemBase {
+  kind: "krw";
+  /** Amount in KRW. */
+  value: number;
+}
+
+/**
+ * One step of a commission ladder.
+ *
+ * `underRub` is an EXCLUSIVE upper bound — the only bracket array in this
+ * codebase that is, which is why it is not called `maxRub` like the tariff
+ * brackets in CustomsConfig. The operator stated the ladder that way («до
+ * 1,5 млн» / «1,5-5,5 млн»), so at exactly 1 500 000 the fee is the SECOND
+ * step, not the first. A `maxRub` here would quote 30 000 instead of 50 000 on
+ * the boundary and nobody would notice until a client landed on it.
+ */
+export interface LadderBracket {
+  /** Exclusive upper bound of the pre-commission subtotal in RUB. */
+  underRub?: number;
+  /** Commission in RUB. */
+  fee: number;
+}
+
+/**
+ * The importer's commission: a step function of the subtotal of every OTHER
+ * line (lot price + Korean costs + customs + broker), so it can only be
+ * computed once the rest of the quote exists — which is why it is not a
+ * `percent` item and why src/calc/pricing.ts always evaluates it last,
+ * whatever position it holds in `costItems`.
+ *
+ * Brackets on the subtotal BEFORE commission, not on the final total: the
+ * latter is self-referential (just under a boundary, adding the smaller
+ * commission pushes the total across it, and the rule then disagrees with
+ * itself). Architect decision 2026-08-08; one line to flip in pricing.ts.
+ */
+export interface LadderCostItem extends CostItemBase {
+  kind: "ladder";
+  /** Ascending; the last entry carries no bound (open end). */
+  brackets: LadderBracket[];
+  value?: undefined;
+}
+
+/**
  * `kind` types `value`: a quoted number ("220000") on a fixed item is a config
  * error, not a cost line — the calculator cannot add a string, and silently
  * skipping it hid a whole shipping line from the total.
+ *
+ * WHY "krw" AND "ladder" LIVE HERE AND NOT IN NEW TOP-LEVEL CONFIG KEYS — do
+ * not "simplify" this back. The core is BUNDLED into the MV3 extension
+ * (docs/harness/project.md), so an installed extension keeps running an OLD
+ * validator against the NEW remote site/config.json. A config carrying an
+ * unrecognised cost-item KIND fails that old validator outright, and the old
+ * client falls back to its embedded copy: today's honest dashes behind the
+ * «встроенные тарифы» marker. The same data parked in new top-level keys would
+ * be silently ignored instead — the old client would accept the config, see no
+ * dashed item, and print an "exact" total missing the Korean costs and the
+ * commission (~3.7% low on the operator's own quote). An old client that
+ * REJECTS what it does not understand is strictly better than one that
+ * accepts it: a confidently wrong number is the single failure this whole
+ * module is built to prevent.
  */
 export type CostItem =
   | FixedCostItem
   | PercentCostItem
   | FormulaCostItem
-  | UnknownCostItem;
+  | UnknownCostItem
+  | KrwCostItem
+  | LadderCostItem;
 
 /**
  * Customs tariff schema (U6, R10-R11): formulas are DATA the importer edits,
@@ -192,7 +268,11 @@ export interface WidgetConfig {
 }
 
 export const DEFAULT_CONFIG: WidgetConfig = {
-  version: 1,
+  // 2 = the operator's real pricing model (2026-08-08): Korean costs in WON
+  // folded before conversion, a fixed broker line, a commission ladder, no
+  // СБКТС/ЭПТС line. No code reads this number; it dates the schema for the
+  // next person diffing a deployed config against the source.
+  version: 2,
   messenger: {
     // The importer's real channel (t.me/globalcartrade). This embedded copy is
     // what the "Заказать" button uses when site/config.json cannot be fetched,
@@ -208,14 +288,21 @@ export const DEFAULT_CONFIG: WidgetConfig = {
     },
     updatedAt: "2026-08-01",
   },
-  // Everything the importer has not priced yet is an "unknown" item: it shows
-  // as a dash and is NOT added to the total (customer instruction, 2026-08-02).
-  // The total is therefore "lot price + customs" only.
+  // The operator's real model, handed over 2026-08-08 as a worked quote
+  // (docs/tasks/importer-pricing.md). Nothing is "unknown" any more: every
+  // line carries a number, so the total is a real "под ключ во Владивостоке"
+  // figure rather than "lot price + customs" with four dashes.
+  //
+  // The old "Доставка Корея — Владивосток" line is gone as a RUB item and came
+  // back as the "krw" one below — his freight is quoted in WON and converted
+  // together with the car. The old "СБКТС и ЭПТС" line is gone outright: his
+  // quote is под ключ во Владивостоке and does not charge it separately.
   costItems: [
     {
-      id: "shipping",
-      label: "Доставка Корея — Владивосток",
-      kind: "unknown",
+      id: "korea",
+      label: "Расходы по Корее (экспорт, фрахт)",
+      kind: "krw",
+      value: 2_500_000,
     },
     {
       id: "customs",
@@ -224,19 +311,21 @@ export const DEFAULT_CONFIG: WidgetConfig = {
       value: "customs_v1",
     },
     {
-      id: "sbkts",
-      label: "СБКТС и ЭПТС",
-      kind: "unknown",
-    },
-    {
       id: "broker",
-      label: "Брокер и СВХ",
-      kind: "unknown",
+      label: "Брокерские услуги и тариф СВХ",
+      kind: "fixed",
+      value: 116_000,
     },
     {
       id: "commission",
-      label: "Комиссия импортёра",
-      kind: "unknown",
+      label: "Комиссия GlobalCarTrade",
+      kind: "ladder",
+      brackets: [
+        { underRub: 1_500_000, fee: 30_000 },
+        { underRub: 5_500_000, fee: 50_000 },
+        { underRub: 9_500_000, fee: 75_000 },
+        { fee: 100_000 },
+      ],
     },
   ],
   customs: {
