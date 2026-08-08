@@ -13,7 +13,7 @@
  */
 
 import { computeQuote } from "../calc/pricing";
-import { loadConfig, type LoadedConfig } from "../config";
+import { loadPageConfig, type LoadedConfig } from "../config";
 import { resolveRates, type ResolvedRates } from "../rates/cbr";
 import type { EncarFetch, ParseListingUrl } from "../encar/types";
 import { fetchCar, parseListingUrl, SOURCE } from "./encar-adapter";
@@ -32,7 +32,11 @@ export interface PageDeps {
 const DEFAULT_DEPS: PageDeps = {
   parseListingUrl,
   fetchCar,
-  loadConfig,
+  // loadPageConfig, not loadConfig: this page ships NEXT TO its config.json, so
+  // it must read the one it was deployed with. Reaching past its own directory
+  // to the production host is what made an operator accept a branch build
+  // against the previously published cost items.
+  loadConfig: loadPageConfig,
   resolveRates,
   demo: SOURCE === "fixture",
 };

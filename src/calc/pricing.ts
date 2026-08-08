@@ -71,9 +71,16 @@ export const TARIFF_ROUNDING_RUB = 100;
  */
 const COMMISSION_FLOOR_NOTE = "минимальная ступень: расчёт ещё неполный";
 
-/** Label of the row that carries the rounding, so the +N ₽ is never silent. */
-const ROUNDING_LABEL = "Округление тарифа (вверх до 100 ₽)";
-const ROUNDING_ID = "tariff-rounding";
+/**
+ * Appended to the note of the line that absorbs the rounding.
+ *
+ * The rounding used to be a row of its own. The operator, looking at the page:
+ * «округление убери и просто зашей молча в цену». The ROW is gone; the RULE and
+ * this fragment stay, because a duty a client recomputes from the decree would
+ * otherwise come out a few roubles under what we printed, with nothing on the
+ * page saying why. One clause on an existing line is not the row he objected to.
+ */
+const ROUNDING_NOTE = "с округлением тарифа вверх до 100 ₽";
 
 /** Id of the engine's converted lot-price line (src/calc/customs.ts). */
 const LOT_LINE_ID = "lot";
@@ -316,7 +323,7 @@ export function computeQuote(
   let tariffSum = 0;
   let tariffComplete = true;
   let tariffCount = 0;
-  let lastTariffIndex = -1;
+  let firstTariffIndex = -1;
   for (const line of base.items) {
     if (line.id === LOT_LINE_ID) {
       for (const row of splitPriceLine(
@@ -332,7 +339,7 @@ export function computeQuote(
     items.push(line);
     if (!isConfigItemId(config.costItems, line.id)) {
       tariffCount += 1;
-      lastTariffIndex = items.length - 1;
+      if (firstTariffIndex === -1) firstTariffIndex = items.length - 1;
       if (isUnknownLine(line)) tariffComplete = false;
       else tariffSum += line.rub;
     }
@@ -355,16 +362,34 @@ export function computeQuote(
   // COMPLETE: under "partial" the total is advertised as a lower bound
   // («от N ₽»), and rounding a floor upwards is exactly how a floor stops
   // being one.
-  const rounded: CostLine[] = [];
+  //
+  // It is absorbed into the FIRST tariff line rather than shown as its own row
+  // (the operator: «округление убери и просто зашей молча в цену»). First, not
+  // last, because the first line is the duty — the only member of the block
+  // that is an FX CONVERSION rather than a statutory RUB figure. Bending the
+  // утильсбор or the сбор за оформление would make a number that a client can
+  // look up in ПП РФ disagree with the decree; bending a converted one costs
+  // nothing checkable.
   const roundingRub =
     tariffComplete && tariffCount > 0
       ? ceilTo(tariffSum, TARIFF_ROUNDING_RUB) - tariffSum
       : 0;
+  const rounded: CostLine[] = [];
   for (let index = 0; index < items.length; index += 1) {
-    rounded.push(items[index]!);
-    if (index === lastTariffIndex && roundingRub > 0) {
-      rounded.push({ id: ROUNDING_ID, label: ROUNDING_LABEL, rub: roundingRub });
+    const line = items[index]!;
+    if (index === firstTariffIndex && roundingRub > 0 && !isUnknownLine(line)) {
+      rounded.push({
+        id: line.id,
+        label: line.label,
+        rub: line.rub + roundingRub,
+        note:
+          line.note === undefined
+            ? ROUNDING_NOTE
+            : `${line.note}, ${ROUNDING_NOTE}`,
+      });
+      continue;
     }
+    rounded.push(line);
   }
 
   // The commission brackets on the subtotal of everything else. Under

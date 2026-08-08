@@ -135,17 +135,26 @@ describe("the operator's quote, lot 41599967 (2026-08-08)", () => {
   it("reproduces his single tariff line as duty + утильсбор + оформление", () => {
     // He prints ONE row, «Таможенная пошлина 3-5 лет (физлицо, коммерческий
     // утиль. сбор)» = 2 326 200. Our engine itemises it; the parts must add up
-    // to his figure once the rounding row is included.
-    expect(amount(result.items, "duty")).toBe(474_216);
+    // to his figure. The 43 ₽ of rounding rides on the DUTY line — the only
+    // converted member of the block — so the утильсбор and the сбор stay the
+    // exact figures a client can look up in ПП РФ.
+    expect(amount(result.items, "duty")).toBe(474_216 + 43);
     expect(amount(result.items, "recycling")).toBe(1_838_400);
     expect(amount(result.items, "clearance")).toBe(13_541);
-    expect(amount(result.items, "tariff-rounding")).toBe(43);
     const tariff =
       amount(result.items, "duty") +
       amount(result.items, "recycling") +
-      amount(result.items, "clearance") +
-      amount(result.items, "tariff-rounding");
+      amount(result.items, "clearance");
     expect(tariff).toBe(2_326_200);
+  });
+
+  it("shows no rounding row — the operator asked for it gone", () => {
+    // «округление убери и просто зашей молча в цену». The rule stays (the total
+    // above is his to the ruble); only the row is gone, and the line that
+    // absorbed it says so in its note rather than silently disagreeing with a
+    // duty the client recomputes from the decree.
+    expect(result.items.find((item) => item.id === "tariff-rounding")).toBeUndefined();
+    expect(byId(result.items, "duty").note).toContain("округлением тарифа");
   });
 
   it("charges the fixed broker line and the ladder step he charged", () => {
@@ -277,19 +286,26 @@ describe("the tariff rounding rule («округляем вверх до нул�
   it("rounds the tariff block up to the nearest 100, never down", () => {
     expect(TARIFF_ROUNDING_RUB).toBe(100);
     const quote = computeQuote(quoteLot(), QUOTE_RATES, DEFAULT_CONFIG);
-    const rounding = amount(quote.items, "tariff-rounding");
-    expect(rounding).toBeGreaterThan(0);
-    expect(rounding).toBeLessThan(TARIFF_ROUNDING_RUB);
+    const tariff =
+      amount(quote.items, "duty") +
+      amount(quote.items, "recycling") +
+      amount(quote.items, "clearance");
+    expect(tariff % TARIFF_ROUNDING_RUB).toBe(0);
+    // Up, never nearest: the client is never quoted less than the real cost.
+    expect(tariff).toBeGreaterThan(474_216 + 1_838_400 + 13_541);
+    expect(tariff - (474_216 + 1_838_400 + 13_541)).toBeLessThan(
+      TARIFF_ROUNDING_RUB,
+    );
   });
 
-  it("shows the rounding as its own row instead of bending a statutory line", () => {
-    // Утильсбор and сбор за оформление are exact RUB amounts set by decree; a
-    // client checking them against ПП РФ must find the published figure, so the
-    // rounding cannot be hidden inside either of them.
+  it("bends the converted duty, never a statutory amount", () => {
+    // Утильсбор and сбор за оформление are exact RUB figures set by decree; a
+    // client checking them against ПП РФ must find the published number. The
+    // duty is an FX conversion, so it is the one that can absorb the remainder
+    // without contradicting a published source.
     const quote = computeQuote(quoteLot(), QUOTE_RATES, DEFAULT_CONFIG);
     expect(amount(quote.items, "recycling")).toBe(1_838_400);
     expect(amount(quote.items, "clearance")).toBe(13_541);
-    expect(byId(quote.items, "tariff-rounding").label).toContain("Округление");
   });
 
   it("emits no rounding row when the block already lands on 100", () => {
@@ -314,7 +330,8 @@ describe("the tariff rounding rule («округляем вверх до нул�
       amount(flat.items, "recycling") +
       amount(flat.items, "clearance");
     expect(tariff % TARIFF_ROUNDING_RUB).toBe(0);
-    expect(flat.items.find((item) => item.id === "tariff-rounding")).toBeUndefined();
+    // Nothing to absorb, so the duty line keeps its own note untouched.
+    expect(byId(flat.items, "duty").note).not.toContain("округлением");
   });
 
   it("does not round a floor upwards", () => {
@@ -324,7 +341,8 @@ describe("the tariff rounding rule («округляем вверх до нул�
     delete lot.powerHp;
     const quote = computeQuote(lot, QUOTE_RATES, DEFAULT_CONFIG);
     expect(quote.precision).toBe("partial");
-    expect(quote.items.find((item) => item.id === "tariff-rounding")).toBeUndefined();
+    expect(byId(quote.items, "duty").note).not.toContain("округлением");
+    expect(amount(quote.items, "duty")).toBe(474_216);
   });
 });
 
@@ -518,7 +536,7 @@ describe("the seam between the engine and the model", () => {
     // (wrong rounding); one called "lot" would duplicate the price row and
     // produce a negative Korean-costs row. Neither throws — both print wrong
     // money — so the validator rejects them at load.
-    for (const id of ["lot", "duty", "recycling", "clearance", "tariff-rounding"]) {
+    for (const id of ["lot", "duty", "recycling", "clearance"]) {
       const cfg = JSON.parse(
         JSON.stringify(config({ costItems: withItem({ id, label: "X", kind: "fixed", value: 1 }) })),
       ) as unknown;

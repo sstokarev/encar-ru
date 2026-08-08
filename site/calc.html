@@ -12,9 +12,15 @@
   .card{background:#fff;border-radius:12px;padding:16px 20px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}
   .muted{color:#666;font-size:.9rem}
   form[data-calc-form]{display:flex;flex-wrap:wrap;gap:10px}
-  input[data-calc-url]{flex:1 1 260px;min-height:44px;box-sizing:border-box;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font:1rem inherit;font-family:inherit}
-  input[data-calc-power]{flex:0 1 140px;min-height:44px;box-sizing:border-box;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font:1rem inherit;font-family:inherit}
-  button[data-calc-submit]{min-height:44px;padding:12px 20px;border:0;border-radius:8px;background:#c00;color:#fff;font:600 1rem inherit;font-family:inherit;cursor:pointer}
+  /* font-size отдельным свойством, а не шорткатом: `font:1rem inherit` —
+     невалидное объявление (шорткат требует семейство, а inherit допустим
+     только как значение целиком), парсер выбрасывает его целиком и поле
+     уезжает на дефолт браузера ~13px. На iOS Safari фокус в поле мельче 16px
+     зумит страницу и обратно не отзумливает — клиент, пришедший по ссылке из
+     Telegram, остаётся на съехавшей вбок странице. 1rem = 16px. */
+  input[data-calc-url]{flex:1 1 260px;min-height:44px;box-sizing:border-box;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:1rem;font-family:inherit}
+  input[data-calc-power]{flex:0 1 140px;min-height:44px;box-sizing:border-box;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:1rem;font-family:inherit}
+  button[data-calc-submit]{min-height:44px;padding:12px 20px;border:0;border-radius:8px;background:#c00;color:#fff;font-size:1rem;font-weight:600;font-family:inherit;cursor:pointer}
   button[data-calc-submit]:disabled{opacity:.6;cursor:progress}
   [data-calc-result][data-loading]{opacity:.5}
   [data-error]{background:#fdecec;border:1px solid #f2b8b8;border-radius:12px;padding:12px 16px;margin:12px 0}

@@ -316,8 +316,9 @@ describe("breakdown panel", () => {
     //   recycling 5,200 (>=3y, <=3000cc, <=160hp); clearance 4,924
     //   (lot <= 1,200,000, ПП РФ 1638).
     // The tariff block is 496,124 and the operator rounds it UP to the nearest
-    // 100 («мы округляем вверх до нулей»), so a +76 row appears and the total
-    // is 1,146,200 rather than 1,146,124.
+    // 100 («мы округляем вверх до нулей»), so the total is 1,146,200 rather
+    // than 1,146,124. The +76 rides on the duty line and has no row of its own:
+    // «округление убери и просто зашей молча в цену».
     const result = computeQuote(
       { priceKrw: KRW, ...LOT },
       { krwRub: 0.05, eurRub: 90 },
@@ -340,16 +341,16 @@ describe("breakdown panel", () => {
       "duty",
       "recycling",
       "clearance",
-      "tariff-rounding",
       "total",
     ]);
     expect(rowValue(host, "lot")).toBe("500 000 ₽");
     expect(rowValue(host, "shipping")).toBe("100 000 ₽");
     expect(rowValue(host, "commission")).toBe("50 000 ₽");
-    expect(rowValue(host, "duty")).toBe("486 000 ₽");
+    // 486,000 + the 76 ₽ of rounding, absorbed silently.
+    expect(rowValue(host, "duty")).toBe("486 076 ₽");
+    // The statutory amounts are untouched — a client can look them up.
     expect(rowValue(host, "recycling")).toBe("5 200 ₽");
     expect(rowValue(host, "clearance")).toBe("4 924 ₽");
-    expect(rowValue(host, "tariff-rounding")).toBe("76 ₽");
     expect(rowValue(host, "total")).toBe("1 146 200 ₽");
     expect(panelOf(host).getAttribute("data-precision")).toBe("exact");
   });
