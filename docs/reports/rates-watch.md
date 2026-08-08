@@ -1,5 +1,6 @@
 # Report: task/rates-watch
 
+PR: https://github.com/sstokarev/encar-ru/pull/6 (task/rates-watch -> main)
 Plan: docs/plans/2026-08-08-003-feat-rates-watch-plan.md
 
 ## The brief's premise did not survive contact with the source
