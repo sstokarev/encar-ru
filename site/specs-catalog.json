@@ -4,22 +4,613 @@
   "entries": [
     {
       "make": "hyundai",
-      "aliases": ["ioniq 5", "ioniq5"],
-      "from": "202102",
-      "fuel": "electric",
-      "electricHp30min": 76
+      "aliases": [
+        "grandeur"
+      ],
+      "from": "201911",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 2359,
+      "iceHp": 159,
+      "electricHp30min": 41,
+      "grades": [
+        "calligraphy",
+        "choice",
+        "exclusive",
+        "leblanc",
+        "premium"
+      ]
     },
     {
       "make": "hyundai",
-      "aliases": ["sonata"],
+      "aliases": [
+        "grandeur"
+      ],
+      "from": "202211",
+      "to": "202604",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1598,
+      "iceHp": 180,
+      "electricHp30min": 50,
+      "grades": [
+        "black",
+        "calligraphy",
+        "exclusive",
+        "exterior",
+        "honors",
+        "ink",
+        "premium"
+      ]
+    },
+    {
+      "make": "hyundai",
+      "aliases": [
+        "ioniq 5",
+        "ioniq5"
+      ],
+      "from": "202102",
+      "fuel": "electric",
+      "electricHp30min": 76,
+      "grades": [
+        "commercial",
+        "e-lite",
+        "e-value",
+        "exclusive",
+        "long",
+        "n-line",
+        "plus",
+        "prestige",
+        "range",
+        "standard"
+      ]
+    },
+    {
+      "make": "hyundai",
+      "aliases": [
+        "ioniq 5",
+        "ioniq5"
+      ],
+      "from": "202102",
+      "to": "202403",
+      "fuel": "electric",
+      "electricHp30min": 103,
+      "grades": [
+        "exclusive",
+        "long",
+        "prestige",
+        "range"
+      ]
+    },
+    {
+      "make": "hyundai",
+      "aliases": [
+        "kona"
+      ],
+      "from": "201908",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1580,
+      "iceHp": 105,
+      "electricHp30min": 14,
+      "grades": [
+        "choise",
+        "inspiration",
+        "modern",
+        "premium",
+        "smart",
+        "special"
+      ]
+    },
+    {
+      "make": "hyundai",
+      "aliases": [
+        "santa fe",
+        "santafe"
+      ],
+      "from": "202107",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1598,
+      "iceHp": 180,
+      "electricHp30min": 19,
+      "grades": [
+        "calligraphy",
+        "exclusive",
+        "prestige",
+        "seats"
+      ]
+    },
+    {
+      "make": "hyundai",
+      "aliases": [
+        "santa fe",
+        "santafe"
+      ],
+      "from": "202308",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1598,
+      "iceHp": 180,
+      "electricHp30min": 20,
+      "grades": [
+        "calligraphy",
+        "exclusive",
+        "prestige",
+        "seats"
+      ]
+    },
+    {
+      "make": "hyundai",
+      "aliases": [
+        "sonata"
+      ],
+      "from": "201207",
+      "to": "201412",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1999,
+      "iceHp": 150,
+      "electricHp30min": 25,
+      "grades": [
+        "hybrid",
+        "modern",
+        "premium",
+        "smart"
+      ]
+    },
+    {
+      "make": "hyundai",
+      "aliases": [
+        "sonata"
+      ],
+      "from": "201705",
+      "to": "201905",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1999,
+      "iceHp": 156,
+      "electricHp30min": 25,
+      "grades": [
+        "modern",
+        "nuu-gdi",
+        "premium",
+        "smart",
+        "special"
+      ]
+    },
+    {
+      "make": "hyundai",
+      "aliases": [
+        "sonata"
+      ],
+      "from": "201707",
+      "to": "201905",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1999,
+      "iceHp": 156,
+      "electricHp30min": 34,
+      "grades": [
+        "exclusive",
+        "nuu-gdi",
+        "premium"
+      ]
+    },
+    {
+      "make": "hyundai",
+      "aliases": [
+        "sonata"
+      ],
       "from": "201903",
-      "to": "202312",
+      "to": "202305",
       "fuel": "hybrid",
       "hybridKind": "parallel",
       "engineCc": 1999,
       "iceHp": 152,
       "electricHp30min": 20,
-      "grades": ["smart", "premium", "prestige", "exclusive"]
+      "grades": [
+        "family",
+        "inspiration",
+        "millennials",
+        "modern",
+        "plus",
+        "premium",
+        "smart"
+      ]
+    },
+    {
+      "make": "hyundai",
+      "aliases": [
+        "sonata"
+      ],
+      "from": "202305",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1999,
+      "iceHp": 152,
+      "electricHp30min": 32,
+      "grades": [
+        "exclusive",
+        "inspiration",
+        "premium"
+      ]
+    },
+    {
+      "make": "hyundai",
+      "aliases": [
+        "tucson"
+      ],
+      "from": "202010",
+      "to": "202312",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1598,
+      "iceHp": 180,
+      "electricHp30min": 19,
+      "grades": [
+        "adventure",
+        "inspiration",
+        "line",
+        "modern",
+        "premium"
+      ]
+    },
+    {
+      "make": "hyundai",
+      "aliases": [
+        "tucson"
+      ],
+      "from": "202312",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1598,
+      "iceHp": 180,
+      "electricHp30min": 20,
+      "grades": [
+        "hybrid",
+        "inspiration",
+        "line",
+        "modern",
+        "premium"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "ev6",
+        "ev 6"
+      ],
+      "from": "202103",
+      "fuel": "electric",
+      "electricHp30min": 76,
+      "grades": [
+        "air",
+        "earth",
+        "gt-line",
+        "light"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "ev6",
+        "ev 6"
+      ],
+      "from": "202103",
+      "fuel": "electric",
+      "electricHp30min": 110,
+      "grades": [
+        "air",
+        "earth",
+        "gt-line",
+        "light"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "ev6",
+        "ev 6"
+      ],
+      "from": "202103",
+      "to": "202405",
+      "fuel": "electric",
+      "electricHp30min": 57,
+      "grades": [
+        "air",
+        "earth",
+        "light"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "ev6",
+        "ev 6"
+      ],
+      "from": "202210",
+      "to": "202405",
+      "fuel": "electric",
+      "electricHp30min": 194,
+      "grades": [
+        "gt"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "ev9",
+        "ev 9"
+      ],
+      "from": "202306",
+      "fuel": "electric",
+      "electricHp30min": 72,
+      "grades": [
+        "air",
+        "earth",
+        "seats"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "ev9",
+        "ev 9"
+      ],
+      "from": "202306",
+      "fuel": "electric",
+      "electricHp30min": 136,
+      "grades": [
+        "air",
+        "earth",
+        "gt-line",
+        "relax",
+        "seats"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "k5"
+      ],
+      "from": "201306",
+      "to": "201507",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1999,
+      "iceHp": 150,
+      "electricHp30min": 27,
+      "grades": [
+        "luxury",
+        "noblesse",
+        "prestige"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "k5"
+      ],
+      "from": "201512",
+      "to": "202110",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1999,
+      "iceHp": 156,
+      "electricHp30min": 37,
+      "grades": [
+        "noblesse",
+        "prestige",
+        "special"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "k5"
+      ],
+      "from": "201607",
+      "to": "201810",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1999,
+      "iceHp": 156,
+      "electricHp30min": 49,
+      "grades": [
+        "noblesse",
+        "special"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "k5"
+      ],
+      "from": "201912",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1999,
+      "iceHp": 152,
+      "electricHp30min": 20,
+      "grades": [
+        "noblesse",
+        "prestige",
+        "signature",
+        "trendy"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "k8"
+      ],
+      "from": "202104",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1598,
+      "iceHp": 180,
+      "electricHp30min": 19,
+      "grades": [
+        "light",
+        "nobless",
+        "signature",
+        "special"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "k8"
+      ],
+      "from": "202408",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1598,
+      "iceHp": 180,
+      "electricHp30min": 20,
+      "grades": [
+        "best",
+        "black",
+        "choiсe",
+        "light",
+        "noblesse",
+        "signature"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "niro"
+      ],
+      "from": "201603",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1580,
+      "iceHp": 105,
+      "electricHp30min": 14,
+      "grades": [
+        "best",
+        "choice",
+        "hybrid",
+        "luxury",
+        "noblesse",
+        "plug-in-hybrid",
+        "prestige",
+        "signature",
+        "special",
+        "trendy"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "niro"
+      ],
+      "from": "201903",
+      "to": "202403",
+      "fuel": "electric",
+      "electricHp30min": 39,
+      "grades": [
+        "air",
+        "earth",
+        "ev",
+        "lights",
+        "noblesse",
+        "prestige",
+        "taxi"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "niro"
+      ],
+      "from": "202206",
+      "fuel": "electric",
+      "electricHp30min": 50,
+      "grades": [
+        "air",
+        "earth",
+        "ev"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "sorento"
+      ],
+      "from": "202003",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1598,
+      "iceHp": 180,
+      "electricHp30min": 19,
+      "grades": [
+        "gravity",
+        "noblesse",
+        "prestige",
+        "signature"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "sorento"
+      ],
+      "from": "202308",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1598,
+      "iceHp": 180,
+      "electricHp30min": 20,
+      "grades": [
+        "gravity",
+        "hybrid",
+        "noblesse",
+        "prestige",
+        "seats",
+        "signature"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "sportage"
+      ],
+      "from": "202107",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1598,
+      "iceHp": 180,
+      "electricHp30min": 19,
+      "grades": [
+        "edition",
+        "gravity",
+        "hybrid",
+        "noblesse",
+        "prestige",
+        "signature"
+      ]
+    },
+    {
+      "make": "kia",
+      "aliases": [
+        "sportage"
+      ],
+      "from": "202411",
+      "fuel": "hybrid",
+      "hybridKind": "parallel",
+      "engineCc": 1598,
+      "iceHp": 180,
+      "electricHp30min": 20,
+      "grades": [
+        "hybrid",
+        "noblesse",
+        "prestige",
+        "signature",
+        "x-line"
+      ]
     }
   ]
 }
