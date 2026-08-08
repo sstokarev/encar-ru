@@ -1,6 +1,6 @@
 +++
 branch = "task/smoke-pipeline"
-worktree = "/Users/stokarev/Repos/encar-ru-smoke-pipeline"
+worktree = "/Users/stokarev/orca/workspaces/encar-ru/smoke-pipeline"
 size = "small"
 size_why = "one new one-paragraph file, no code touched"
 owns = ["docs/harness/smoke-2026-08-08.md"]
